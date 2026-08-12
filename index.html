@@ -10,15 +10,17 @@
 @media(max-width:800px){.header-row{align-items:flex-start;flex-direction:column}.tools{overflow:auto;width:100%;flex-wrap:nowrap}.layout{display:block}.side{position:sticky;top:105px;height:auto;z-index:10;border-right:0;border-bottom:1px solid var(--line);padding:9px}.facility-row{margin-bottom:7px}.nav{display:flex;overflow:auto}.nav button{min-width:max-content;background:#edf2f4}.main{padding:12px 10px 45px}.grid4,.grid3{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:1fr 1fr}.split{grid-template-columns:1fr}.hero{padding:17px}.hero h2{font-size:20px}}
 @media(max-width:520px){.grid4,.grid3{grid-template-columns:1fr}.photos{grid-template-columns:1fr}.responsive{border:0;overflow:visible}.responsive table,.responsive tbody,.responsive tr,.responsive td{display:block;width:100%}.responsive thead{display:none}.responsive tr{border:1px solid var(--line);border-radius:10px;padding:8px;margin-bottom:10px}.responsive td{border:0;display:grid;grid-template-columns:40% 60%;align-items:center;white-space:normal}.responsive td:before{content:attr(data-label);font-size:11px;color:var(--muted);font-weight:800}}
 @media print{.header,.side,.no-print,#toast{display:none!important}.layout{display:block}.main{padding:0}.card,.hero{box-shadow:none;break-inside:avoid}.hero{color:#000;background:#fff;border:2px solid #123047}}
+.privacy-notice{max-width:1500px;margin:12px auto 0;padding:12px 16px;border:1px solid #e2c36d;border-left:5px solid #d18a18;border-radius:10px;background:#fff8df;color:#664600;font-size:13px}.privacy-notice strong{display:block;margin-bottom:3px;color:#513700}.privacy-notice p{margin:0}.tools>.foot:last-child{font-size:0}.tools>.foot:last-child:after{content:"Ver. 6.7";font-size:12px}
 </style>
 </head>
 <body>
+<section class="privacy-notice no-print" role="note" aria-label="データ保存に関する注意"><strong>入力データ・写真の保存について</strong><p>入力内容と写真は、この端末のブラウザ内に保存され、外部サーバーへ自動送信されません。ブラウザの履歴・サイトデータの削除、端末やブラウザの変更によりデータが消失する場合があります。共用端末では、ほかの利用者に保存内容を閲覧される可能性があるため、使用後のデータ管理にご注意ください。必要なデータは「保存（JSON）」や「Excel出力」で定期的にバックアップしてください。</p></section>
 <header class="header"><div class="header-row"><h1>岸壁法線変位 ローカル点検アプリ</h1><div class="tools"><span id="save-state" class="save">● 保存済み</span><button id="export-json" class="btn light">保存（JSON）</button><label class="btn light file-button">復元<input id="import-json" type="file" accept=".json,application/json"></label><button id="export-excel" class="btn gold">Excel出力</button><button id="print" class="btn light">画面印刷</button><span class="foot" style="color:#dcecf2">Ver. 6.6</span></div></div></header>
 <div class="layout"><aside class="side"><div class="facility-row"><select id="facility-select" aria-label="対象施設"></select><button id="add-facility" class="btn outline small" title="施設を追加">＋</button></div><nav id="nav" class="nav"></nav></aside><main class="main"><div id="view" class="inner"></div></main></div>
 <div id="toast"></div>
 <script>
 (()=>{'use strict';
-const VERSION=6.6,KEY='quay-normal-displacement-v2';
+const VERSION=6.7,KEY='quay-normal-displacement-v2';
 const $=(s,r=document)=>r.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8),today=()=>new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'}),num=v=>Number.isFinite(Number(v))?Number(v):0,fmt=(v,d=1)=>Number(v).toLocaleString('ja-JP',{minimumFractionDigits:d,maximumFractionDigits:d});
 let toastTimer,saveTimer,view='overview',zoneId='';
