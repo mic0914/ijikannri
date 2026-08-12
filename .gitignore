@@ -1,0 +1,12 @@
+# Keep generated and local inspection data out of source control.
+*.xlsx
+*.xls
+*.csv
+*.pdf
+*.json
+*.jpg
+*.jpeg
+*.png
+work/
+outputs/
+
