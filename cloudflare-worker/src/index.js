@@ -66,11 +66,13 @@ export default {
       if (!isAdmin(request, env)) return json({ error: "Unauthorized" }, 401);
       const input = await readBody(request);
       if (!input) return json({ error: "JSON形式が不正です" }, 400);
-      const days = Math.trunc(Number(input.days));
-      if (!Number.isInteger(days) || days < 1 || days > 365) return json({ error: "日数は1～365日で指定してください" }, 400);
+      const unit = input.unit === "minutes" ? "minutes" : "days";
+      const duration = Math.trunc(Number(input.duration ?? input.days));
+      const maximum = unit === "minutes" ? 1440 : 365;
+      if (!Number.isInteger(duration) || duration < 1 || duration > maximum) return json({ error: unit === "minutes" ? "分数は1～1440分で指定してください" : "日数は1～365日で指定してください" }, 400);
       await ensureSchema(env);
       const issuedAt = Date.now();
-      const expiresAt = issuedAt + days * 86400000;
+      const expiresAt = issuedAt + duration * (unit === "minutes" ? 60000 : 86400000);
       const id = crypto.randomUUID();
       await env.DB.prepare("INSERT INTO issued_urls (id, issued_at, expires_at) VALUES (?, ?, ?)").bind(id, issuedAt, expiresAt).run();
       const body = textToUrl(JSON.stringify({ iat: issuedAt, exp: expiresAt, id }));
