@@ -59,7 +59,7 @@ const requireSession = async (input, env) => {
 const expiredPage = (message = "このURLの利用期限は終了しました") => new Response(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>利用停止</title><style>body{font-family:sans-serif;background:#edf2f3;margin:0;padding:24px;color:#20313b}.box{max-width:640px;margin:12vh auto;background:#fff;border-radius:14px;padding:28px}</style><div class="box"><h1>${message}</h1><p>管理者に新しい利用者URLの発行を依頼してください。</p></div></html>`, { status: 403, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === "/api/issue") {
       if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -83,7 +83,6 @@ export default {
       if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
       const input = await readBody(request);
       if (!input) return json({ error: "入力が不正です" }, 400);
-      await ensureSchema(env);
       const payload = await validateToken(input.token, env.SIGNING_SECRET);
       if (!payload) return json({ error: "利用期限が終了しています" }, 403);
       const deviceId = clean(input.deviceId, 80);
@@ -93,7 +92,7 @@ export default {
       const currentDevice = deviceType(request.headers.get("user-agent") || "");
       if (existing) {
         if (existing.revoked) return json({ revoked: true, error: "管理者により利用が強制解除されました" }, 403);
-        await env.DB.prepare("UPDATE visitors SET last_access=?, access_count=access_count+1, device_type=? WHERE url_id=? AND device_id=?").bind(now, currentDevice, payload.id, deviceId).run();
+        ctx.waitUntil(env.DB.prepare("UPDATE visitors SET last_access=?, access_count=access_count+1, device_type=? WHERE url_id=? AND device_id=?").bind(now, currentDevice, payload.id, deviceId).run());
         return json({ registered: true, company: existing.company, person: existing.person });
       }
       const company = clean(input.company, 100);
@@ -108,7 +107,7 @@ export default {
       if (!input) return json({ error: "入力が不正です" }, 400);
       const session = await requireSession(input, env);
       if (session.response) return session.response;
-      await env.DB.prepare("UPDATE visitors SET last_access=?, device_type=? WHERE url_id=? AND device_id=?").bind(Date.now(), deviceType(request.headers.get("user-agent") || ""), session.payload.id, session.deviceId).run();
+      ctx.waitUntil(env.DB.prepare("UPDATE visitors SET last_access=?, device_type=? WHERE url_id=? AND device_id=?").bind(Date.now(), deviceType(request.headers.get("user-agent") || ""), session.payload.id, session.deviceId).run());
       return json({ active: true, expiresAt: session.payload.exp });
     }
     if (url.pathname === "/api/visitors") {
