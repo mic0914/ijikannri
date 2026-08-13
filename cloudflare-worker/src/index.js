@@ -106,7 +106,6 @@ export default {
       if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
       const input = await readBody(request);
       if (!input) return json({ error: "入力が不正です" }, 400);
-      await ensureSchema(env);
       const session = await requireSession(input, env);
       if (session.response) return session.response;
       await env.DB.prepare("UPDATE visitors SET last_access=?, device_type=? WHERE url_id=? AND device_id=?").bind(Date.now(), deviceType(request.headers.get("user-agent") || ""), session.payload.id, session.deviceId).run();
@@ -138,6 +137,14 @@ export default {
       const html = await asset.text();
       const marker = `<script>window.__LIMITED_ACCESS__=${JSON.stringify({ expiresAt: payload.exp, token })};</script>`;
       return new Response(html.replace("<head>", `<head>${marker}`), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex, nofollow" } });
+    }
+    if (url.pathname === "/" || url.pathname === "/index.html") {
+      const asset = await env.ASSETS.fetch(new URL("/index.html", url));
+      const headers = new Headers(asset.headers);
+      headers.set("cache-control", "no-store, no-cache, must-revalidate");
+      headers.set("pragma", "no-cache");
+      headers.set("expires", "0");
+      return new Response(asset.body, { status: asset.status, headers });
     }
     return env.ASSETS.fetch(request);
   }
