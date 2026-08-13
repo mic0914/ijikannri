@@ -77,7 +77,7 @@ export default {
       await env.DB.prepare("INSERT INTO issued_urls (id, issued_at, expires_at) VALUES (?, ?, ?)").bind(id, issuedAt, expiresAt).run();
       const body = textToUrl(JSON.stringify({ iat: issuedAt, exp: expiresAt, id }));
       const token = `${body}.${await sign(body, env.SIGNING_SECRET)}`;
-      return json({ url: `${url.origin}/access?t=${token}&v=14.9-${issuedAt}`, issuedAt, expiresAt });
+      return json({ url: `${url.origin}/access?t=${token}&v=15.0-${issuedAt}`, issuedAt, expiresAt });
     }
     if (url.pathname === "/api/visitor") {
       if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -113,7 +113,11 @@ export default {
     if (url.pathname === "/api/visitors") {
       if (!isAdmin(request, env)) return json({ error: "Unauthorized" }, 401);
       await ensureSchema(env);
-      const { results } = await env.DB.prepare("SELECT v.url_id,v.device_id,v.company,v.person,v.device_type,v.first_access,v.last_access,v.access_count,v.revoked,u.expires_at FROM visitors v JOIN issued_urls u ON u.id=v.url_id ORDER BY v.last_access DESC LIMIT 200").all();
+      const now = Date.now();
+      const activeSince = now - 120000;
+      await env.DB.prepare("DELETE FROM visitors WHERE last_access < ? OR url_id IN (SELECT id FROM issued_urls WHERE expires_at <= ?)").bind(activeSince, now).run();
+      await env.DB.prepare("DELETE FROM issued_urls WHERE expires_at <= ? AND id NOT IN (SELECT DISTINCT url_id FROM visitors)").bind(now).run();
+      const { results } = await env.DB.prepare("SELECT v.url_id,v.device_id,v.company,v.person,v.device_type,v.first_access,v.last_access,v.access_count,v.revoked,u.expires_at FROM visitors v JOIN issued_urls u ON u.id=v.url_id WHERE v.last_access >= ? AND u.expires_at > ? ORDER BY v.last_access DESC LIMIT 200").bind(activeSince, now).all();
       return json({ visitors: results });
     }
     if (url.pathname === "/api/visitor/revoke") {
