@@ -77,7 +77,8 @@ export default {
       await env.DB.prepare("INSERT INTO issued_urls (id, issued_at, expires_at) VALUES (?, ?, ?)").bind(id, issuedAt, expiresAt).run();
       const body = textToUrl(JSON.stringify({ iat: issuedAt, exp: expiresAt, id }));
       const token = `${body}.${await sign(body, env.SIGNING_SECRET)}`;
-      return json({ url: `${url.origin}/access?t=${token}&v=16.5-${issuedAt}`, issuedAt, expiresAt });
+      const publicOrigin = "https://ijikannri-access.mic0914.workers.dev";
+      return json({ url: `${publicOrigin}/access?t=${token}&v=16.6-${issuedAt}`, issuedAt, expiresAt });
     }
     if (url.pathname === "/api/visitor") {
       if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
