@@ -70,42 +70,68 @@ assert.equal(restored.spans[0].id, state.spans[0].id, 'span ids must survive rel
 const first = api.ensurePortInspection(state.spans[0], targets[0]);
 const jpeg = 'data:image/jpeg;base64,/9j/2Q==';
 first.photos.push(
-  { id: 'p1', data: jpeg, order: 9, mimeType: 'image/jpeg' },
-  { id: 'p2', data: jpeg, order: 9, mimeType: 'image/jpeg' },
-  { id: 'p3', data: jpeg, order: 9, mimeType: 'image/jpeg' },
+  { id: 'p1', inspectionItemId: targets[0].id, criteriaSetId: targets[0].criteriaSetId, data: jpeg, order: 9, mimeType: 'image/jpeg', rating: 'a', ratedAt: '2026-08-21T00:00:00.000Z', conditionComment: 'その他', conditionFreeText: 'コメントA' },
+  { id: 'p2', inspectionItemId: targets[0].id, criteriaSetId: targets[0].criteriaSetId, data: jpeg, order: 9, mimeType: 'image/jpeg', rating: 'c', ratedAt: '2026-08-21T00:01:00.000Z', conditionComment: 'その他', conditionFreeText: '' },
 );
 api.reindexPortPhotos(first);
-assert.deepEqual(Array.from(first.photos, (photo) => photo.order), [1, 2, 3]);
-first.photos.splice(1, 1);
-api.reindexPortPhotos(first);
 assert.deepEqual(Array.from(first.photos, (photo) => photo.order), [1, 2]);
-first.photos.push({ id: 'p4', data: jpeg, order: 8, mimeType: 'image/jpeg' });
+assert.equal(api.refreshPortInspectionStatus(first), 'photos', 'one incomplete photo keeps the target incomplete');
+first.photos[1].conditionFreeText = 'コメントC';
+assert.equal(api.refreshPortInspectionStatus(first), 'completed');
+assert.equal(first.photos[0].rating, 'a');
+assert.equal(first.photos[1].rating, 'c');
+
+const reload = api.normalizePortState(JSON.parse(JSON.stringify(state)));
+const reloadedPhotos = reload.spans[0].inspections[targets[0].id].photos;
+assert.equal(reloadedPhotos[0].rating, 'a');
+assert.equal(reloadedPhotos[1].rating, 'c');
+reloadedPhotos[0].rating = 'b';
+assert.equal(reloadedPhotos[1].rating, 'c', 'changing photo 1 must not change photo 2');
+reloadedPhotos[0].rating = 'a';
+
+first.photos.push({ id: 'p3', inspectionItemId: targets[0].id, criteriaSetId: targets[0].criteriaSetId, data: jpeg, order: 8, mimeType: 'image/jpeg', rating: null, ratedAt: null, conditionComment: '', conditionFreeText: '' });
 api.reindexPortPhotos(first);
-assert.deepEqual(Array.from(first.photos, (photo) => photo.order), [1, 2, 3]);
-first.rating = 'a';
-first.ratedAt = new Date().toISOString();
-first.conditionComment = 'その他';
-first.conditionFreeText = '検証コメント';
+assert.equal(first.photos[0].rating, 'a', 'adding a photo must preserve photo 1');
+assert.equal(first.photos[1].rating, 'c', 'adding a photo must preserve photo 2');
+assert.equal(api.refreshPortInspectionStatus(first), 'photos');
+first.photos[2].rating = 'd';
+first.photos[2].ratedAt = '2026-08-21T00:02:00.000Z';
+first.photos[2].conditionComment = 'その他';
+first.photos[2].conditionFreeText = 'コメントD';
 assert.equal(api.refreshPortInspectionStatus(first), 'completed');
-first.rating = 'b';
-assert.equal(api.refreshPortInspectionStatus(first), 'completed');
-first.rating = 'a';
 
 const skipped = api.ensurePortInspection(state.spans[0], targets[1]);
 skipped.skipped = true;
 skipped.skipReason = '水中部等で撮影不可';
 assert.equal(api.refreshPortInspectionStatus(skipped), 'skipped');
 const summary = api.summarizePortFacility(state);
-assert.equal(summary.totals.a, 1, 'multiple photos must count as one rating');
-assert.equal(summary.totals.rated, 1);
+assert.equal(summary.totals.a, 1);
+assert.equal(summary.totals.c, 1);
+assert.equal(summary.totals.d, 1);
+assert.equal(summary.totals.rated, 3, 'ratings must be counted per photo');
+assert.equal(summary.totals.completed, 1, 'completion must be counted per target');
 assert.equal(summary.totals.skipped, 1);
 assert.equal(summary.totals.total, 4 * targets.length);
 assert.equal(summary.spans[0].a, 1);
+assert.equal(summary.spans[0].c, 1);
+assert.equal(summary.spans[0].d, 1);
 assert.equal(summary.spans[0].skipped, 1);
+assert.equal(summary.totals.completionRate, Math.round(2 / summary.totals.total * 1000) / 10);
 const restoredWithData = api.normalizePortState(JSON.parse(JSON.stringify(state)));
 assert.equal(restoredWithData.spans[0].inspections[targets[0].id].photos.length, 3);
-assert.equal(restoredWithData.spans[0].inspections[targets[0].id].rating, 'a');
+assert.deepEqual(Array.from(restoredWithData.spans[0].inspections[targets[0].id].photos, (photo) => photo.rating), ['a', 'c', 'd']);
 assert.equal(restoredWithData.spans[0].inspections[targets[1].id].status, 'skipped');
+
+const legacyState = api.createPortState();
+legacyState.structureId = structure.id;
+const legacyRecord = api.ensurePortInspection(legacyState.spans[0], targets[0]);
+legacyRecord.photos = [{ id: 'old-1', inspectionItemId: targets[0].id, data: jpeg }, { id: 'old-2', inspectionItemId: targets[0].id, data: jpeg }];
+legacyRecord.rating = 'b'; legacyRecord.ratedAt = '2026-08-20T00:00:00.000Z'; legacyRecord.conditionComment = 'その他'; legacyRecord.conditionFreeText = '旧コメント';
+const migrated = api.normalizePortState(JSON.parse(JSON.stringify(legacyState))).spans[0].inspections[targets[0].id];
+assert.deepEqual(Array.from(migrated.photos, (photo) => photo.rating), ['b', 'b']);
+assert.ok(migrated.photos.every((photo) => photo.conditionFreeText === '旧コメント'));
+assert.ok(!Object.hasOwn(migrated, 'rating') && !Object.hasOwn(migrated, 'conditionComment'), 'legacy target fields must not remain in new saves');
+assert.equal(migrated.status, 'completed');
 
 const output = api.buildPortOutputData(state);
 const xlsx = api.buildPortExcelBytes(output);
@@ -114,18 +140,39 @@ const binary = Buffer.from(xlsx);
 assert.ok(binary.includes(Buffer.from('[Content_Types].xml')));
 assert.ok(binary.includes(Buffer.from('xl/media/image1.jpg')));
 assert.ok(binary.includes(Buffer.from('xl/media/image2.jpg')));
+assert.ok(binary.includes(Buffer.from('xl/media/image3.jpg')));
+function storedZipEntries(bytes) {
+  const entries = new Map(); let offset = 0; const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  while (offset + 30 <= bytes.length && view.getUint32(offset, true) === 0x04034b50) {
+    const size = view.getUint32(offset + 18, true), nameLength = view.getUint16(offset + 26, true), extraLength = view.getUint16(offset + 28, true);
+    const nameStart = offset + 30, dataStart = nameStart + nameLength + extraLength;
+    entries.set(new TextDecoder().decode(bytes.slice(nameStart, nameStart + nameLength)), bytes.slice(dataStart, dataStart + size));
+    offset = dataStart + size;
+  }
+  return entries;
+}
+const entries = storedZipEntries(xlsx);
+const summaryXml = new TextDecoder().decode(entries.get('xl/worksheets/sheet1.xml'));
+const photoXml = new TextDecoder().decode(entries.get('xl/worksheets/sheet2.xml'));
+assert.match(summaryXml, /a判定写真数/);
+assert.match(summaryXml, /c判定写真数/);
+for (const expected of ['コメントA', 'コメントC', 'コメントD', '>a<', '>c<', '>d<']) assert.ok(photoXml.includes(expected), `Excel missing ${expected}`);
 const pdfHtml = api.buildPortPdfHtml(output);
 assert.match(pdfHtml, /点検診断・a～d評価集計/);
 assert.match(pdfHtml, /スパン1 写真帳/);
 assert.match(pdfHtml, /スキップ記録/);
+for (const expected of ['評価 a', '評価 c', '評価 d', 'コメントA', 'コメントC', 'コメントD']) assert.ok(pdfHtml.includes(expected), `PDF missing ${expected}`);
 
+const keptPhoto = first.photos[1];
+first.photos.splice(0, 1);
+api.reindexPortPhotos(first);
+assert.equal(first.photos[0].id, keptPhoto.id);
+assert.equal(first.photos[0].rating, 'c', 'deleting photo 1 must preserve photo 2 rating');
+assert.deepEqual(Array.from(first.photos, (photo) => photo.order), [1, 2]);
 first.photos.length = 0;
 api.refreshPortInspectionStatus(first);
 assert.equal(first.status, 'pending');
-assert.equal(first.rating, null);
-assert.equal(first.ratedAt, null);
-assert.equal(first.conditionComment, '');
-assert.equal(first.conditionFreeText, '');
+assert.ok(!Object.hasOwn(first, 'rating'));
 
 for (const marker of [
   'inspection-app-mode',
@@ -137,7 +184,10 @@ for (const marker of [
   'Ver.16.7',
   '維持管理計画・機能保全支援 ローカル点検アプリ 管理者用',
 ]) assert.ok(index.includes(marker), `missing marker: ${marker}`);
-assert.match(source, /function portRatingArea\([^)]*\)\{if\(!record\.photos\.length\)return''/);
+assert.doesNotMatch(source, /function portRatingArea/);
+assert.doesNotMatch(source, /<h3>a～d劣化度<\/h3>/);
+assert.match(source, /data-port-photo-rating/);
+assert.match(source, /portItemById\(photo\.inspectionItemId\)/);
 assert.match(index, /appMode:'fishery'/);
 assert.match(index, /restoredMode=doc\.appMode\|\|'fishery'/);
 assert.match(index, /if\(__startupMode!=='port'\)\{try\{const x=JSON\.parse\(localStorage\.getItem\(KEY\)\)/);
