@@ -49,6 +49,64 @@ assert.ok(structures.every((structure) => structure.criteriaSetRefs.length > 0 &
 assert.equal(items.reduce((count, item) => count + ['a', 'b', 'c', 'd'].filter((rating) => Object.hasOwn(item.criteria, rating)).length, 0), 444);
 assert.ok(items.every((item) => ['a', 'b', 'c', 'd'].every((rating) => typeof item.criteria[rating] === 'string' && item.criteria[rating].length > 0)));
 
+const caisson = structures.find((candidate) => candidate.name === 'ケーソン式係船岸');
+assert.ok(caisson, 'ケーソン式係船岸 must exist');
+const caissonTargets = api.portTargetsForStructure(caisson.id);
+const caissonComponents = Array.from(api.portComponentsForTargets(caissonTargets));
+assert.deepEqual(caissonComponents, ['岸壁法線', 'エプロン', 'ケーソン', 'エプロン（通常）', 'エプロン（利用制限が厳しい場合）', '上部工（RC）', '上部工（無筋）']);
+assert.equal(new Set(caissonComponents).size, caissonComponents.length, 'component options must not contain duplicates');
+assert.deepEqual(caissonComponents, Array.from(caissonTargets, (target) => target.component).filter((component, index, all) => all.indexOf(component) === index), 'component order must follow first appearance in PORT_MASTER order');
+
+const directState = api.createPortState();
+directState.structureId = caisson.id;
+const directSpan = directState.spans[0];
+const wallIndex = api.selectPortComponent(directSpan, caissonTargets, '岸壁法線');
+const wallTarget = caissonTargets[wallIndex];
+const wallRecord = api.ensurePortInspection(directSpan, wallTarget);
+wallRecord.photos.push({ id: 'wall-photo', inspectionItemId: wallTarget.id, criteriaSetId: wallTarget.criteriaSetId, component: wallTarget.component, order: 1, rating: 'a', ratedAt: '2026-08-21T01:00:00.000Z', conditionComment: 'その他', conditionFreeText: '岸壁法線写真', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
+api.refreshPortInspectionStatus(wallRecord);
+const upperIndex = api.selectPortComponent(directSpan, caissonTargets, '上部工（RC）');
+assert.equal(caissonTargets[upperIndex].component, '上部工（RC）', 'users must be able to navigate away from 岸壁法線');
+api.selectPortComponent(directSpan, caissonTargets, '岸壁法線');
+assert.equal(directSpan.inspections[wallTarget.id].photos[0].inspectionItemId, wallTarget.id);
+assert.equal(directSpan.inspections[wallTarget.id].photos[0].rating, 'a', 'component navigation must preserve per-photo ratings');
+const apronTarget = caissonTargets.find((target) => target.component === 'エプロン');
+const apronRecord = api.ensurePortInspection(directSpan, apronTarget);
+apronRecord.skipped = true; apronRecord.skipReason = '該当なし'; api.refreshPortInspectionStatus(apronRecord);
+api.selectPortComponent(directSpan, caissonTargets, '上部工（無筋）');
+assert.equal(directSpan.inspections[apronTarget.id].status, 'skipped', 'component navigation must preserve skipped targets');
+const directOutput = api.buildPortOutputData(directState);
+const wallEntry = directOutput.spans[0].entries.find((entry) => entry.target.id === wallTarget.id);
+assert.equal(wallEntry.target.component, '岸壁法線');
+assert.equal(wallEntry.record.photos[0].inspectionItemId, wallTarget.id, 'output data must retain target/component relationships');
+assert.ok(Buffer.from(api.buildPortExcelBytes(directOutput)).includes(Buffer.from('岸壁法線')), 'Excel must retain the selected target component');
+const directPdf = api.buildPortPdfHtml(directOutput);
+assert.match(directPdf, /岸壁法線/);
+assert.match(directPdf, /凹凸・出入り/);
+
+const repeatedStructure = structures.find((candidate) => {
+  const counts = new Map();
+  for (const target of api.portTargetsForStructure(candidate.id)) counts.set(target.component, (counts.get(target.component) || 0) + 1);
+  return [...counts.values()].some((count) => count >= 3);
+});
+const repeatedTargets = api.portTargetsForStructure(repeatedStructure.id);
+const repeatedComponent = api.portComponentsForTargets(repeatedTargets).find((component) => api.portTargetIndexesForComponent(repeatedTargets, component).length >= 3);
+const repeatedIndexes = Array.from(api.portTargetIndexesForComponent(repeatedTargets, repeatedComponent));
+const repeatedState = api.createPortState(); repeatedState.structureId = repeatedStructure.id;
+const repeatedSpan = repeatedState.spans[0];
+const completedRecord = api.ensurePortInspection(repeatedSpan, repeatedTargets[repeatedIndexes[0]]); completedRecord.status = 'completed';
+const skippedRecord = api.ensurePortInspection(repeatedSpan, repeatedTargets[repeatedIndexes[1]]); skippedRecord.status = 'skipped'; skippedRecord.skipped = true;
+assert.equal(api.selectPortComponent(repeatedSpan, repeatedTargets, repeatedComponent), repeatedIndexes[2], 'component selection must open its first incomplete target');
+const repeatedProgress = api.portComponentProgress(repeatedSpan, repeatedTargets, repeatedSpan.currentTargetIndex);
+assert.equal(repeatedProgress.position, 3);
+assert.equal(repeatedProgress.completed, 2);
+for (const index of repeatedIndexes) {
+  const record = api.ensurePortInspection(repeatedSpan, repeatedTargets[index]);
+  record.status = index === repeatedIndexes[1] ? 'skipped' : 'completed';
+}
+assert.equal(api.selectPortComponent(repeatedSpan, repeatedTargets, repeatedComponent), repeatedIndexes[0], 'a fully completed component must reopen at its first target');
+assert.equal(api.adjacentPortTargetIndex(repeatedTargets, repeatedIndexes[0], 1), repeatedIndexes[1], 'push navigation must remain inside the selected component in PORT_MASTER order');
+
 const structure = structures.find((candidate) => api.portTargetsForStructure(candidate.id).length >= 2);
 const targets = api.portTargetsForStructure(structure.id);
 const state = api.createPortState();
@@ -188,6 +246,9 @@ assert.doesNotMatch(source, /function portRatingArea/);
 assert.doesNotMatch(source, /<h3>a～d劣化度<\/h3>/);
 assert.match(source, /data-port-photo-rating/);
 assert.match(source, /portItemById\(photo\.inspectionItemId\)/);
+assert.match(source, /data-port-component/);
+assert.match(source, /selectPortComponent\(span,targets,event\.target\.value\)/);
+assert.doesNotMatch(source, /<h2>部材：\$\{esc\(target\.component/);
 assert.match(index, /appMode:'fishery'/);
 assert.match(index, /restoredMode=doc\.appMode\|\|'fishery'/);
 assert.match(index, /if\(__startupMode!=='port'\)\{try\{const x=JSON\.parse\(localStorage\.getItem\(KEY\)\)/);
