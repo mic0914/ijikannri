@@ -2,10 +2,15 @@
   "name": "ijikannri-access",
   "private": true,
   "scripts": {
-    "check": "wrangler deploy --dry-run",
-    "deploy": "wrangler deploy"
+    "check": "node --check src/index.js && wrangler deploy --dry-run --env staging",
+    "dev": "wrangler dev --local",
+    "migrate:local": "wrangler d1 migrations apply DB --local",
+    "migrate:staging": "wrangler d1 migrations apply DB --remote --env staging",
+    "deploy:staging": "wrangler deploy --env staging",
+    "test": "node test/security-smoke.mjs"
   },
   "devDependencies": {
+    "miniflare": "5.20260811.1-alpha",
     "wrangler": "^4.0.0"
   }
 }
