@@ -30,6 +30,7 @@ const sandbox = {
   Math,
   JSON,
   atob,
+  URL,
 };
 sandbox.globalThis = sandbox;
 vm.runInNewContext(source, sandbox);
@@ -56,6 +57,88 @@ const caissonComponents = Array.from(api.portComponentsForTargets(caissonTargets
 assert.deepEqual(caissonComponents, ['岸壁法線', 'エプロン', 'ケーソン', 'エプロン（通常）', 'エプロン（利用制限が厳しい場合）', '上部工（RC）', '上部工（無筋）']);
 assert.equal(new Set(caissonComponents).size, caissonComponents.length, 'component options must not contain duplicates');
 assert.deepEqual(caissonComponents, Array.from(caissonTargets, (target) => target.component).filter((component, index, all) => all.indexOf(component) === index), 'component order must follow first appearance in PORT_MASTER order');
+
+assert.equal(api.portUiModeFromUrl('https://preview.invalid/?mode=port&ui=pc', { coarse: true, maxTouchPoints: 5, viewportWidth: 800 }), 'pc');
+assert.equal(api.portUiModeFromUrl('https://preview.invalid/?mode=port&ui=mobile', { coarse: false, maxTouchPoints: 0, viewportWidth: 1440 }), 'mobile');
+assert.equal(api.resolvePortUiMode({ coarse: true, maxTouchPoints: 5, viewportWidth: 1024 }), 'mobile');
+assert.equal(api.resolvePortUiMode({ coarse: false, maxTouchPoints: 5, viewportWidth: 1024, platform: 'MacIntel' }), 'mobile', 'iPad-class MacIntel touch devices must use mobile UI');
+assert.equal(api.resolvePortUiMode({ coarse: false, maxTouchPoints: 10, viewportWidth: 1440, platform: 'Win32' }), 'pc', 'wide touch-enabled PCs remain desktop UI without a coarse pointer');
+assert.equal(api.resolvePortUiMode({ coarse: false, maxTouchPoints: 0, viewportWidth: 1440, platform: 'Win32' }), 'pc');
+
+const workflowState = api.createPortState(); workflowState.structureId = caisson.id;
+const workflowSpan = workflowState.spans[0];
+const pcContainer = api.ensurePortInspection(workflowSpan, caissonTargets[0]);
+const blankPcPhoto = api.createPortPhoto(null, workflowSpan, { id: 'pc-blank', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
+assert.equal(blankPcPhoto.component, '');
+assert.equal(blankPcPhoto.inspectionItemId, null);
+assert.equal(blankPcPhoto.criteriaSetId, null);
+assert.equal(blankPcPhoto.sourceTargetId, null);
+const blankPcUi = api.portPhotoFields(blankPcPhoto, caissonTargets);
+assert.match(blankPcUi, /<option value="" selected>選択してください<\/option>/);
+assert.match(blankPcUi, /data-port-photo-rating="pc-blank"[^>]*disabled/);
+
+const pcComponents = ['ケーソン', '上部工（無筋）', 'エプロン'];
+const pcPhotos = pcComponents.map((component, index) => {
+  const photo = api.createPortPhoto(null, workflowSpan, { id: `pc-${index + 1}`, data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
+  assert.equal(api.setPortPhotoComponent(photo, component, caissonTargets).status, 'resolved');
+  Object.assign(photo, { rating: ['a', 'b', 'c'][index], ratedAt: '2026-08-22T00:00:00.000Z', conditionComment: 'その他', conditionFreeText: `PC写真${index + 1}` });
+  return photo;
+});
+pcContainer.photos.push(...pcPhotos);
+api.reindexPortSpanPhotos(workflowSpan);
+api.refreshPortSpanStatuses(workflowSpan, caissonTargets);
+const desktopView = api.portDesktopSpanView(workflowSpan, caissonTargets);
+assert.doesNotMatch(desktopView, /次の撮影対象/);
+assert.match(desktopView, /JPG／JPEG／PNGをドラッグ＆ドロップ/);
+assert.match(desktopView, /完了 3 \/ 7/);
+assert.match(desktopView, /未完了 4/);
+assert.match(desktopView, /スキップ 0/);
+assert.match(desktopView, /未完了項目を確認/);
+assert.match(desktopView, /<details class="port-incomplete">/);
+assert.doesNotMatch(desktopView, /<details class="port-incomplete" open/);
+assert.match(desktopView, /data-port-skip-target=/);
+for (const [index, component] of pcComponents.entries()) {
+  assert.match(desktopView, new RegExp(`data-port-photo-component="pc-${index + 1}"`));
+  assert.match(desktopView, new RegExp(`<option selected>${component.replace(/[()]/g, '\\$&')}<\\/option>`));
+}
+
+const sharedState = api.createPortState(); sharedState.structureId = caisson.id;
+const sharedSpan = sharedState.spans[0], sharedTarget = caissonTargets[0], sharedRecord = api.ensurePortInspection(sharedSpan, sharedTarget);
+const mobilePhoto = api.createPortPhoto(sharedTarget, sharedSpan, { id: 'shared-photo', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
+sharedRecord.photos.push(mobilePhoto); api.refreshPortSpanStatuses(sharedSpan, caissonTargets);
+const mobileView = api.portMobileSpanView(sharedSpan, caissonTargets);
+assert.match(mobileView, /次の撮影対象：岸壁法線/);
+assert.match(mobileView, />写真を撮影<input[^>]*capture="environment"/);
+assert.match(mobileView, /同じ対象を追加撮影/);
+assert.match(mobileView, />次の対象へ<\/button>/);
+assert.doesNotMatch(mobileView, /ドラッグ＆ドロップ/);
+Object.assign(mobilePhoto, { rating: 'b', ratedAt: '2026-08-22T01:00:00.000Z', conditionComment: 'その他', conditionFreeText: 'スマホ保存' });
+api.refreshPortSpanStatuses(sharedSpan, caissonTargets);
+const incompleteSameTargetPhoto = api.createPortPhoto(sharedTarget, sharedSpan, { id: 'shared-incomplete', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
+sharedRecord.photos.push(incompleteSameTargetPhoto); api.reindexPortSpanPhotos(sharedSpan); api.refreshPortSpanStatuses(sharedSpan, caissonTargets);
+assert.equal(api.portTargetStatus(sharedSpan, sharedTarget, caissonTargets), 'completed', 'one completed photo is enough to complete its inspection item');
+let sharedReload = api.normalizePortState(JSON.parse(JSON.stringify(sharedState)));
+let sharedReloadPhoto = api.findPortPhoto(sharedReload.spans[0], 'shared-photo').photo;
+assert.equal(sharedReloadPhoto.component, sharedTarget.component);
+assert.equal(sharedReloadPhoto.rating, 'b');
+assert.equal(sharedReloadPhoto.conditionFreeText, 'スマホ保存');
+assert.match(api.portDesktopSpanView(sharedReload.spans[0], caissonTargets), /data-port-photo-component="shared-photo"/);
+assert.equal(api.setPortPhotoComponent(sharedReloadPhoto, 'エプロン', caissonTargets).status, 'resolved');
+Object.assign(sharedReloadPhoto, { rating: 'c', ratedAt: '2026-08-22T02:00:00.000Z', conditionComment: 'その他', conditionFreeText: 'PC修正' });
+sharedReload = api.normalizePortState(JSON.parse(JSON.stringify(sharedReload)));
+sharedReloadPhoto = api.findPortPhoto(sharedReload.spans[0], 'shared-photo').photo;
+assert.equal(sharedReloadPhoto.component, 'エプロン');
+assert.equal(sharedReloadPhoto.rating, 'c');
+assert.equal(sharedReloadPhoto.conditionFreeText, 'PC修正');
+assert.equal(sharedReloadPhoto.sourceTargetId, sharedTarget.id, 'desktop edits must preserve the mobile push source without creating device-specific data');
+
+const pushState = api.createPortState(); pushState.structureId = caisson.id;
+const pushSpan = pushState.spans[0];
+const firstSkip = api.ensurePortInspection(pushSpan, caissonTargets[0]); firstSkip.skipped = true; firstSkip.status = 'skipped';
+const secondSkip = api.ensurePortInspection(pushSpan, caissonTargets[1]); secondSkip.skipped = true; secondSkip.status = 'skipped';
+api.refreshPortSpanStatuses(pushSpan, caissonTargets);
+assert.equal(api.nextIncompletePortTargetIndex(pushSpan, caissonTargets, -1), 2, 'mobile push order must skip completed or skipped targets');
+assert.match(api.portMobileSpanView(pushSpan, caissonTargets), new RegExp(`次の撮影対象：${caissonTargets[2].component}`));
 
 const ambiguousSpecifications = [
   ['ケーソン式防波堤', '施設全体'],
@@ -166,7 +249,7 @@ const repeatedComponent = api.portComponentsForTargets(repeatedTargets).find((co
 const repeatedIndexes = Array.from(api.portTargetIndexesForComponent(repeatedTargets, repeatedComponent));
 const repeatedState = api.createPortState(); repeatedState.structureId = repeatedStructure.id;
 const repeatedSpan = repeatedState.spans[0];
-const completedRecord = api.ensurePortInspection(repeatedSpan, repeatedTargets[repeatedIndexes[0]]); completedRecord.status = 'completed';
+const completedRecord = api.ensurePortInspection(repeatedSpan, repeatedTargets[repeatedIndexes[0]]); completedRecord.status = 'skipped'; completedRecord.skipped = true;
 const skippedRecord = api.ensurePortInspection(repeatedSpan, repeatedTargets[repeatedIndexes[1]]); skippedRecord.status = 'skipped'; skippedRecord.skipped = true;
 assert.equal(api.selectPortComponent(repeatedSpan, repeatedTargets, repeatedComponent), repeatedIndexes[2], 'component selection must open its first incomplete target');
 const repeatedProgress = api.portComponentProgress(repeatedSpan, repeatedTargets, repeatedSpan.currentTargetIndex);
@@ -174,7 +257,7 @@ assert.equal(repeatedProgress.position, 3);
 assert.equal(repeatedProgress.completed, 2);
 for (const index of repeatedIndexes) {
   const record = api.ensurePortInspection(repeatedSpan, repeatedTargets[index]);
-  record.status = index === repeatedIndexes[1] ? 'skipped' : 'completed';
+  record.status = 'skipped'; record.skipped = true;
 }
 assert.equal(api.selectPortComponent(repeatedSpan, repeatedTargets, repeatedComponent), repeatedIndexes[0], 'a fully completed component must reopen at its first target');
 assert.equal(api.adjacentPortTargetIndex(repeatedTargets, repeatedIndexes[0], 1), repeatedIndexes[1], 'push navigation must remain inside the selected component in PORT_MASTER order');
@@ -207,7 +290,7 @@ Object.assign(photo2, { rating: 'c', ratedAt: '2026-08-21T00:01:00.000Z', condit
 first.photos.push(photo1, photo2);
 api.reindexPortPhotos(first);
 assert.deepEqual(Array.from(first.photos, (photo) => photo.order), [1, 2]);
-assert.equal(api.refreshPortInspectionStatus(first), 'photos', 'one incomplete photo keeps the target incomplete');
+assert.equal(api.refreshPortInspectionStatus(first), 'completed', 'one completed photo completes the target even when another photo is still being entered');
 first.photos[1].conditionFreeText = 'コメントC';
 assert.equal(api.refreshPortInspectionStatus(first), 'completed');
 assert.equal(first.photos[0].rating, 'a');
@@ -242,7 +325,7 @@ first.photos.push(photo3);
 api.reindexPortPhotos(first);
 assert.equal(first.photos[0].rating, 'a', 'adding a photo must preserve photo 1');
 assert.equal(first.photos[1].rating, 'c', 'adding a photo must preserve photo 2');
-assert.equal(api.refreshPortInspectionStatus(first), 'photos');
+assert.equal(api.refreshPortInspectionStatus(first), 'completed');
 first.photos[2].rating = 'd';
 first.photos[2].ratedAt = '2026-08-21T00:02:00.000Z';
 first.photos[2].conditionComment = 'その他';
@@ -270,14 +353,15 @@ assert.equal(summary.totals.a, 1);
 assert.equal(summary.totals.c, 1);
 assert.equal(summary.totals.d, 1);
 assert.equal(summary.totals.rated, 3, 'ratings must be counted per photo');
-assert.equal(summary.totals.completed, 1, 'completion must be counted per target');
+assert.equal(summary.totals.completed, 3, 'completion must follow each photo inspectionItemId and be counted per target');
 assert.equal(summary.totals.skipped, 1);
 assert.equal(summary.totals.total, 4 * targets.length);
 assert.equal(summary.spans[0].a, 1);
 assert.equal(summary.spans[0].c, 1);
 assert.equal(summary.spans[0].d, 1);
 assert.equal(summary.spans[0].skipped, 1);
-assert.equal(summary.totals.completionRate, Math.round(2 / summary.totals.total * 1000) / 10);
+assert.equal(summary.spans[0].completed, 3);
+assert.equal(summary.totals.completionRate, Math.round(4 / summary.totals.total * 1000) / 10);
 assert.equal(summary.details.a[0].component, '岸壁法線');
 assert.equal(summary.details.a[0].diagnosisItem, '凹凸・出入り');
 const collected = api.collectPortResults(state);
@@ -364,7 +448,13 @@ assert.match(source, /data-port-photo-inspection-item/);
 assert.match(source, /model\.choiceRequired\?/);
 assert.match(source, /model\.resolved\?'':'disabled'/);
 assert.doesNotMatch(source, /<select data-port-component/);
-assert.match(source, /現在のプッシュ対象：\$\{esc\(target\.component/);
+assert.match(source, /次の撮影対象：\$\{esc\(target\.component/);
+assert.match(source, /未完了項目を確認/);
+assert.match(source, /portUiMode==='mobile'\?portMobileSpanView/);
+assert.match(source, /capture="environment"/);
+assert.match(index, /\.port-ui-mobile \.port-photos\{grid-template-columns:1fr\}/);
+assert.match(source, /new URL\(location\.href\)\.searchParams\.get\('ui'\)/);
+assert.doesNotMatch(source, /localStorage\.setItem\([^\n]*ui/i);
 assert.match(index, /appMode:'fishery'/);
 assert.match(index, /restoredMode=doc\.appMode\|\|'fishery'/);
 assert.match(index, /if\(__startupMode!=='port'\)\{try\{const x=JSON\.parse\(localStorage\.getItem\(KEY\)\)/);
