@@ -98,6 +98,10 @@ assert.equal(api.portPhotoSelectionModel(fixedInitialPhoto, breakwaterTargets).c
 assert.equal(api.portPhotoSelectionModel(fixedInitialPhoto, breakwaterTargets).resolved, true);
 const ambiguousPhoto = api.createPortPhoto(breakwaterTargets.find((candidate) => candidate.component === 'ケーソン'), { id: 'ambiguous-span' }, { id: 'ambiguous-photo' });
 api.setPortPhotoComponent(ambiguousPhoto, '施設全体', breakwaterTargets);
+const ambiguousPhotoUi = api.portPhotoFields(ambiguousPhoto, breakwaterTargets);
+assert.match(ambiguousPhotoUi, /data-port-photo-component="ambiguous-photo"/);
+assert.match(ambiguousPhotoUi, /data-port-photo-inspection-item="ambiguous-photo"/);
+assert.match(ambiguousPhotoUi, /data-port-photo-rating="ambiguous-photo"[^>]*disabled/);
 assert.equal(api.refreshPortInspectionStatus({ photos: [ambiguousPhoto], skipped: false }), 'photos', 'an unresolved inspection item must keep the target incomplete');
 api.setPortPhotoInspectionItem(ambiguousPhoto, facilityCandidates[0].id, breakwaterTargets);
 Object.assign(ambiguousPhoto, { rating: 'a', ratedAt: '2026-08-21T00:00:00.000Z', conditionComment: 'その他', conditionFreeText: '移動評価' });
@@ -244,6 +248,18 @@ first.photos[2].ratedAt = '2026-08-21T00:02:00.000Z';
 first.photos[2].conditionComment = 'その他';
 first.photos[2].conditionFreeText = 'コメントD';
 assert.equal(api.refreshPortInspectionStatus(first), 'completed');
+const photoCardUis = first.photos.map((photo) => api.portPhotoFields(photo, targets));
+for (const [index, card] of photoCardUis.entries()) {
+  assert.match(card, new RegExp(`aria-label="写真${index + 1}の点検情報"`));
+  assert.match(card, new RegExp(`data-port-photo-component="p${index + 1}"`), `photo ${index + 1} must show its own component selector`);
+  assert.match(card, new RegExp(`data-port-photo-rating="p${index + 1}"`));
+  assert.match(card, new RegExp(`data-port-photo-comment="p${index + 1}"`));
+  assert.match(card, new RegExp(`data-port-photo-free-text="p${index + 1}"`));
+}
+assert.match(photoCardUis[0], /<option selected>岸壁法線<\/option>/);
+assert.match(photoCardUis[1], /<option selected>エプロン<\/option>/);
+assert.match(photoCardUis[2], /<option selected>上部工（RC）<\/option>/);
+assert.doesNotMatch(photoCardUis[1], /data-port-photo-inspection-item/, 'single-candidate components must not show the inspection item selector');
 
 const skipped = api.ensurePortInspection(state.spans[0], targets[2]);
 skipped.skipped = true;
@@ -348,7 +364,7 @@ assert.match(source, /data-port-photo-inspection-item/);
 assert.match(source, /model\.choiceRequired\?/);
 assert.match(source, /model\.resolved\?'':'disabled'/);
 assert.doesNotMatch(source, /<select data-port-component/);
-assert.match(source, /部材：\$\{esc\(target\.component/);
+assert.match(source, /現在のプッシュ対象：\$\{esc\(target\.component/);
 assert.match(index, /appMode:'fishery'/);
 assert.match(index, /restoredMode=doc\.appMode\|\|'fishery'/);
 assert.match(index, /if\(__startupMode!=='port'\)\{try\{const x=JSON\.parse\(localStorage\.getItem\(KEY\)\)/);
