@@ -126,8 +126,11 @@ const sharedSpan = sharedState.spans[0], sharedTarget = caissonTargets[0], share
 const mobilePhoto = api.createPortPhoto(sharedTarget, sharedSpan, { id: 'shared-photo', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
 sharedRecord.photos.push(mobilePhoto); api.refreshPortSpanStatuses(sharedSpan, caissonTargets);
 const mobileView = api.portMobileSpanView(sharedSpan, caissonTargets);
-assert.match(mobileView, /次の撮影対象：岸壁法線/);
+assert.doesNotMatch(mobileView, /次の撮影対象/);
+assert.doesNotMatch(mobileView, /port-mobile-target/);
+assert.match(mobileView, /port-mobile-capture/);
 assert.match(mobileView, />写真を撮影<input[^>]*capture="environment"/);
+assert.match(mobileView, /data-port-photo-component="shared-photo"/);
 assert.doesNotMatch(mobileView, /同じ対象を追加撮影/, 'same-target capture must not be constantly visible');
 assert.match(mobileView, />次へ<\/button>/);
 assert.doesNotMatch(mobileView, />次の対象へ<\/button>/);
@@ -177,7 +180,19 @@ const firstSkip = api.ensurePortInspection(pushSpan, caissonTargets[0]); firstSk
 const secondSkip = api.ensurePortInspection(pushSpan, caissonTargets[1]); secondSkip.skipped = true; secondSkip.status = 'skipped';
 api.refreshPortSpanStatuses(pushSpan, caissonTargets);
 assert.equal(api.nextIncompletePortTargetIndex(pushSpan, caissonTargets, -1), 2, 'mobile push order must skip completed or skipped targets');
-assert.match(api.portMobileSpanView(pushSpan, caissonTargets), new RegExp(`次の撮影対象：${caissonTargets[2].component}`));
+assert.doesNotMatch(api.portMobileSpanView(pushSpan, caissonTargets), /次の撮影対象/);
+assert.equal(pushSpan.currentTargetIndex, 2, 'mobile push logic must keep selecting the next incomplete target internally');
+
+const navigationState = api.createPortState();
+api.resizePortSpans(navigationState, 3);
+navigationState.view = 'span'; navigationState.activeSpanId = navigationState.spans[1].id;
+const mobileNavigation = api.portMobileNavigationView(navigationState);
+assert.match(mobileNavigation, /data-port-nav="setup">施設設定/);
+assert.match(mobileNavigation, /data-port-nav="summary">速報結果/);
+assert.deepEqual(Array.from(mobileNavigation.matchAll(/<option value="[^"]+"[^>]*>スパン(\d+)<\/option>/g), (match) => Number(match[1])), [1, 2, 3]);
+assert.match(mobileNavigation, new RegExp(`<option value="${navigationState.spans[1].id}" selected>スパン2</option>`));
+navigationState.view = 'summary';
+assert.match(api.portMobileNavigationView(navigationState), /<option value="" selected>スパン選択<\/option>/, 'summary must allow returning to any span including the current span');
 
 const ambiguousSpecifications = [
   ['ケーソン式防波堤', '施設全体'],
@@ -644,7 +659,12 @@ assert.match(source, /data-port-photo-inspection-item/);
 assert.match(source, /model\.choiceRequired\?/);
 assert.match(source, /model\.resolved\?'':'disabled'/);
 assert.doesNotMatch(source, /<select data-port-component/);
-assert.match(source, /次の撮影対象：\$\{esc\(target\.component/);
+assert.doesNotMatch(source, /次の撮影対象/);
+assert.match(source, /function portMobileNavigationView/);
+assert.match(source, /data-port-mobile-span/);
+assert.match(source, /data-port-nav="setup">施設設定/);
+assert.match(source, /data-port-nav="summary">速報結果/);
+assert.match(source, /portState\.activeSpanId=spanId;portState\.view='span'/);
 assert.match(source, /未完了項目を確認/);
 assert.match(source, /portUiMode==='mobile'\?portMobileSpanView/);
 assert.match(source, /capture="environment"/);
@@ -654,6 +674,10 @@ assert.match(source, /data-port-action="new-target"/);
 assert.match(source, />次へ<\/button>/);
 assert.doesNotMatch(source, />次の対象へ<\/button>/);
 assert.match(index, /\.port-ui-mobile \.port-photos\{grid-template-columns:1fr\}/);
+assert.match(index, /\.port-mobile-nav-wrap\{display:none\}/);
+assert.match(index, /\.port-ui-mobile \.port-mobile-nav-wrap\{display:block;position:sticky/);
+assert.match(index, /\.port-ui-mobile #port-nav\{display:none\}/);
+assert.match(index, /\.port-ui-pc #port-nav\{position:static;display:grid/);
 assert.match(source, /function buildPortSummaryMatrix/);
 assert.match(source, /sourceSheets:\['00_使用方法','13_評価基準'\]/);
 assert.match(source, /function portSpanItemRepresentative/);
