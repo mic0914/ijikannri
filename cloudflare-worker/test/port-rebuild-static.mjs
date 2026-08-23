@@ -82,13 +82,13 @@ assert.match(blankPcUi, /data-port-photo-rating="pc-blank"[^>]*disabled/);
 const commentPhoto = api.createPortPhoto(caissonTargets[0], workflowSpan, { id: 'comment-photo', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
 commentPhoto.rating = 'b'; commentPhoto.ratedAt = '2026-08-23T00:00:00.000Z';
 let commentUi = api.portPhotoFields(commentPhoto, caissonTargets);
-let commentSelect = commentUi.match(/<select data-port-photo-comment="comment-photo"[\s\S]*?<\/select>/)?.[0] || '';
+let commentSelect = commentUi.match(/<select[^>]*data-port-photo-comment="comment-photo"[\s\S]*?<\/select>/)?.[0] || '';
 assert.doesNotMatch(commentSelect, /選択してください/);
 assert.deepEqual(Array.from(commentSelect.matchAll(/<option value="(あり|なし)"/g), (match) => match[1]), ['あり', 'なし']);
 assert.equal(api.portPhotoCommentComplete(commentPhoto), false);
 api.setPortPhotoComment(commentPhoto, 'あり');
 commentUi = api.portPhotoFields(commentPhoto, caissonTargets);
-assert.doesNotMatch(commentUi.match(/<textarea data-port-photo-free-text="comment-photo"[\s\S]*?<\/textarea>/)?.[0] || '', /disabled/);
+assert.doesNotMatch(commentUi.match(/<textarea[^>]*data-port-photo-free-text="comment-photo"[\s\S]*?<\/textarea>/)?.[0] || '', /disabled/);
 assert.equal(api.portPhotoCommentComplete(commentPhoto), false, 'あり without free text must remain incomplete');
 commentPhoto.conditionFreeText = 'ひび割れあり';
 assert.equal(api.portPhotoCommentComplete(commentPhoto), true, 'あり with free text must complete');
@@ -96,7 +96,7 @@ api.setPortPhotoComment(commentPhoto, 'なし');
 assert.equal(commentPhoto.conditionFreeText, '', 'なし must clear existing free text');
 assert.equal(api.portPhotoCommentComplete(commentPhoto), true, 'なし must not require free text');
 commentUi = api.portPhotoFields(commentPhoto, caissonTargets);
-assert.match(commentUi.match(/<textarea data-port-photo-free-text="comment-photo"[\s\S]*?<\/textarea>/)?.[0] || '', /disabled/);
+assert.match(commentUi.match(/<textarea[^>]*data-port-photo-free-text="comment-photo"[\s\S]*?<\/textarea>/)?.[0] || '', /disabled/);
 
 const pcComponents = ['ケーソン', '上部工（無筋）', 'エプロン'];
 const pcPhotos = pcComponents.map((component, index) => {
@@ -442,6 +442,61 @@ assert.equal(isolatedContent(api.findPortPhoto(reloadedIsolationSpan, isolationP
 api.appendPortPhoto(isolationReload, 'mobile', reloadedIsolationSpan.id, isolationSource.id, isolationPhoto2.id, { id: 'isolation-photo-4', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
 assert.equal(isolatedContent(api.findPortPhoto(reloadedIsolationSpan, isolationPhoto2.id).photo), beforeDeleteContent2, 'adding photo 4 must not affect photo 2');
 assert.equal(isolatedContent(api.findPortPhoto(reloadedIsolationSpan, isolationPhoto3.id).photo), beforeDeleteContent3, 'adding photo 4 must not affect photo 3');
+
+// Reproduce the mobile same-target flow and trace P1/P2 through change, normalize, save, render, span navigation, and reload.
+const traceState = api.createPortState(); traceState.structureId = caissonBreakwater.id;
+const traceSpan = traceState.spans[0], traceSource = breakwaterTargets.find((target) => target.component === 'ケーソン');
+const traceP1 = api.appendPortPhoto(traceState, 'mobile', traceSpan.id, traceSource.id, '', { id: 'trace-P1', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' }).photo;
+Object.assign(traceP1, { rating: 'a', ratedAt: '2026-08-23T02:00:00.000Z', conditionComment: 'なし', conditionFreeText: '' });
+const traceP2 = api.appendPortPhoto(traceState, 'mobile', traceSpan.id, traceSource.id, traceP1.id, { id: 'trace-P2', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' }).photo;
+const traceValues = (state) => ['trace-P1', 'trace-P2'].map((id) => { const photo = api.findPortPhoto(state.spans[0], id).photo; return { id: photo.id, component: photo.component, inspectionItemId: photo.inspectionItemId, criteriaSetId: photo.criteriaSetId, sourceTargetId: photo.sourceTargetId, rating: photo.rating, conditionComment: photo.conditionComment }; });
+const traceExpectedBefore = [
+  { id: 'trace-P1', component: 'ケーソン', inspectionItemId: traceSource.id, criteriaSetId: traceSource.criteriaSetId, sourceTargetId: traceSource.id, rating: 'a', conditionComment: 'なし' },
+  { id: 'trace-P2', component: 'ケーソン', inspectionItemId: traceSource.id, criteriaSetId: traceSource.criteriaSetId, sourceTargetId: traceSource.id, rating: null, conditionComment: '' },
+];
+assert.deepEqual(Array.from(traceValues(traceState)), traceExpectedBefore, 'A: select change直前');
+const traceP2UiBefore = api.portPhotoFields(api.findPortPhoto(traceSpan, 'trace-P2').photo, breakwaterTargets);
+assert.match(traceP2UiBefore, /id="port-photo-component-trace-P2"/);
+assert.match(traceP2UiBefore, /data-photo-id="trace-P2"/);
+assert.doesNotMatch(traceP2UiBefore, /data-photo-id="trace-P1"/);
+const eventPhotoId = traceP2UiBefore.match(/data-photo-id="([^"]+)"/)?.[1];
+assert.equal(eventPhotoId, 'trace-P2', 'the DOM event key must be photo.id, not array index or sourceTargetId');
+api.updatePortPhotoComponent(traceSpan, eventPhotoId, '上部工', breakwaterTargets);
+const traceExpectedAfter = [
+  traceExpectedBefore[0],
+  { id: 'trace-P2', component: '上部工', inspectionItemId: 'criteria_03_item_004', criteriaSetId: 'criteria_03', sourceTargetId: traceSource.id, rating: null, conditionComment: '' },
+];
+assert.deepEqual(Array.from(traceValues(traceState)), traceExpectedAfter, 'B: changeイベント直後');
+assert.equal(api.findPortPhoto(traceSpan, 'trace-P1').record.inspectionItemId, traceSource.id, 'P1 stays in its own inspection record');
+assert.equal(api.findPortPhoto(traceSpan, 'trace-P2').record.inspectionItemId, 'criteria_03_item_004', 'P2 alone moves to its current inspection record');
+let traceNormalized = api.normalizePortState(JSON.parse(JSON.stringify(traceState)));
+assert.deepEqual(Array.from(traceValues(traceNormalized)), traceExpectedAfter, 'C: 正規化／補完直後');
+const traceSavedJson = JSON.stringify(traceNormalized);
+assert.deepEqual(Array.from(traceValues(traceNormalized)), traceExpectedAfter, 'D: save直前');
+const traceSaved = JSON.parse(traceSavedJson);
+assert.deepEqual(Array.from(traceValues(traceSaved)), traceExpectedAfter, 'E: save直後');
+assert.deepEqual(Array.from(traceValues(traceSaved)), traceExpectedAfter, 'F: render直前');
+const traceP1Ui = api.portPhotoFields(api.findPortPhoto(traceSaved.spans[0], 'trace-P1').photo, breakwaterTargets);
+const traceP2Ui = api.portPhotoFields(api.findPortPhoto(traceSaved.spans[0], 'trace-P2').photo, breakwaterTargets);
+assert.match(traceP1Ui, /id="port-photo-component-trace-P1"[\s\S]*?<option selected>ケーソン<\/option>/);
+assert.match(traceP2Ui, /id="port-photo-component-trace-P2"[\s\S]*?<option selected>上部工<\/option>/);
+assert.deepEqual(Array.from(traceValues(traceSaved)), traceExpectedAfter, 'G: render直後');
+let traceReloaded = api.normalizePortState(JSON.parse(traceSavedJson));
+assert.deepEqual(Array.from(traceValues(traceReloaded)), traceExpectedAfter, 'H: localStorage再読込後');
+api.resizePortSpans(traceReloaded, 2);
+assert.equal(api.setPortNavigation(traceReloaded, 'span', traceReloaded.spans[1].id), true);
+assert.equal(api.setPortNavigation(traceReloaded, 'span', traceReloaded.spans[0].id), true);
+assert.deepEqual(Array.from(traceValues(traceReloaded)), traceExpectedAfter, 'I: スパン移動後');
+traceReloaded = api.normalizePortState(JSON.parse(JSON.stringify(traceReloaded)));
+assert.deepEqual(Array.from(traceValues(traceReloaded)), traceExpectedAfter, 'J: ページ再読込後');
+const traceIds = [traceP1Ui, traceP2Ui].flatMap((html) => Array.from(html.matchAll(/(?:^|\s)id="([^"]+)"/g), (match) => match[1]));
+assert.equal(new Set(traceIds).size, traceIds.length, 'photo card controls must never reuse an HTML id');
+
+const duplicateState = api.normalizePortState(JSON.parse(JSON.stringify(traceState))), duplicateSpan = duplicateState.spans[0];
+api.ensurePortInspection(duplicateSpan, breakwaterTargets[0]).photos.push({ ...api.findPortPhoto(duplicateSpan, 'trace-P1').photo });
+const duplicateBefore = JSON.stringify(api.portSpanPhotoEntries(duplicateSpan).filter(({ photo }) => photo.id === 'trace-P1').map(({ photo }) => photo));
+assert.equal(api.updatePortPhotoComponent(duplicateSpan, 'trace-P1', '上部工', breakwaterTargets).status, 'duplicate');
+assert.equal(JSON.stringify(api.portSpanPhotoEntries(duplicateSpan).filter(({ photo }) => photo.id === 'trace-P1').map(({ photo }) => photo)), duplicateBefore, 'duplicate IDs must fail closed instead of updating the wrong sibling photo');
 
 assert.deepEqual(Array.from(breakwaterTargets, (target) => ({
   inspectionItemId: target.id,
