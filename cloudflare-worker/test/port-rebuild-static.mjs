@@ -26,10 +26,12 @@ const sandbox = {
   crypto: webcrypto,
   TextEncoder,
   Uint8Array,
+  Blob,
   Date,
   Math,
   JSON,
   atob,
+  btoa,
   URL,
 };
 sandbox.globalThis = sandbox;
@@ -240,18 +242,71 @@ assert.equal(api.isPortStorageQuotaError(quotaError), true);
 const threeSpanStorageState = api.createPortState();
 threeSpanStorageState.structureId = caisson.id;
 api.resizePortSpans(threeSpanStorageState, 3);
-for (const [index, span] of threeSpanStorageState.spans.entries()) {
-  api.appendPortPhoto(threeSpanStorageState, 'mobile', span.id, caissonTargets[0].id, '', { id: `quota-span-${index + 1}`, data: `data:image/jpeg;base64,${'A'.repeat(600000)}`, mimeType: 'image/jpeg' });
+const photoBlobMap = new Map();
+const memoryPhotoStore = {
+  async put(id, blob) { photoBlobMap.set(id, blob); return blob; },
+  async get(id) { return photoBlobMap.get(id); },
+  async delete(id) { photoBlobMap.delete(id); },
+  async keys() { return [...photoBlobMap.keys()]; },
+};
+api.setPortPhotoStoreForTests(memoryPhotoStore);
+for (const [spanIndex, span] of threeSpanStorageState.spans.entries()) for (let photoIndex = 0; photoIndex < 5; photoIndex += 1) {
+  const id = `idb-span-${spanIndex + 1}-photo-${photoIndex + 1}`;
+  await api.portPhotoBlobPut(id, new Blob([new Uint8Array(600000).fill(spanIndex + photoIndex + 1)], { type: 'image/jpeg' }));
+  api.appendPortPhoto(threeSpanStorageState, 'mobile', span.id, caissonTargets[0].id, '', { id, mimeType: 'image/jpeg', width: 1024, height: 768 });
 }
 const threeSpanStorageJson = JSON.stringify(threeSpanStorageState);
-assert.ok(threeSpanStorageJson.length * 2 < 5 * 1024 * 1024, 'three representative compressed mobile photos must fit a conservative 5 MiB UTF-16 budget');
-assert.deepEqual(Array.from(threeSpanStorageState.spans, (span) => api.portSpanPhotoEntries(span).length), [1, 1, 1]);
+assert.doesNotMatch(threeSpanStorageJson, /data:image\//, 'new photos must not store Base64 in localStorage metadata');
+assert.ok(threeSpanStorageJson.length < 50000, 'localStorage metadata must not grow with 15 photo bodies');
+assert.deepEqual(Array.from(threeSpanStorageState.spans, (span) => api.portSpanPhotoEntries(span).length), [5, 5, 5]);
+assert.equal(photoBlobMap.size, 15, 'IndexedDB store must contain one Blob per photo');
+assert.ok([...photoBlobMap.values()].every((blob) => blob instanceof Blob && blob.size === 600000));
+const threeSpanReload = api.normalizePortState(JSON.parse(threeSpanStorageJson));
+assert.deepEqual(Array.from(threeSpanReload.spans, (span) => api.portSpanPhotoEntries(span).length), [5, 5, 5], 'reload must restore metadata for every span');
+const threeSpanHydrated = await api.portStateWithPhotoData(threeSpanReload);
+assert.equal(threeSpanHydrated.spans.flatMap((span) => api.portSpanPhotoEntries(span)).filter((entry) => /^data:image\/jpeg;base64,/.test(entry.photo.data)).length, 15, 'reload must hydrate all 15 photo Blobs');
 assert.equal(api.setPortNavigation(threeSpanStorageState, 'summary'), true);
 assert.equal(api.setPortNavigation(threeSpanStorageState, 'span', threeSpanStorageState.spans[1].id), true);
-const rollbackCandidate = api.appendPortPhoto(threeSpanStorageState, 'mobile', threeSpanStorageState.spans[1].id, caissonTargets[0].id, '', { id: 'quota-rollback', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
+const rollbackCandidate = api.appendPortPhoto(threeSpanStorageState, 'mobile', threeSpanStorageState.spans[1].id, caissonTargets[0].id, '', { id: 'quota-rollback', mimeType: 'image/jpeg' });
 api.rollbackPortPhotos(threeSpanStorageState.spans[1], [rollbackCandidate.photo.id], caissonTargets);
-assert.deepEqual(Array.from(api.portSpanPhotoEntries(threeSpanStorageState.spans[1]), (entry) => entry.photo.id), ['quota-span-2'], 'quota rollback must remove only the failed addition');
+assert.equal(api.portSpanPhotoEntries(threeSpanStorageState.spans[1]).length, 5, 'quota rollback must remove only the failed addition');
 assert.equal(api.setPortNavigation(threeSpanStorageState, 'summary'), true, 'navigation must remain usable after quota rollback');
+
+const legacyIdbState = api.createPortState(); legacyIdbState.structureId = caisson.id;
+const legacyIdbRecord = api.ensurePortInspection(legacyIdbState.spans[0], caissonTargets[0]);
+legacyIdbRecord.photos.push(
+  api.createPortPhoto(caissonTargets[0], legacyIdbState.spans[0], { id: 'legacy-idb-1', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' }),
+  api.createPortPhoto(caissonTargets[0], legacyIdbState.spans[0], { id: 'legacy-idb-2', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' }),
+);
+let migrationSaves = 0;
+assert.equal(await api.migrateLegacyPortPhotos(legacyIdbState, () => { migrationSaves += 1; }), 2);
+assert.equal(migrationSaves, 2, 'legacy migration must commit one photo at a time');
+assert.ok(legacyIdbRecord.photos.every((photo) => !Object.hasOwn(photo, 'data')));
+assert.ok((await api.portPhotoBlobGet('legacy-idb-1')) instanceof Blob);
+const migratedReload = api.normalizePortState(JSON.parse(JSON.stringify(legacyIdbState)));
+const migratedOutput = await api.buildPortOutputDataWithPhotos(migratedReload);
+assert.match(migratedOutput.spans[0].entries[0].photos[0].photo.data, /^data:image\/jpeg;base64,/);
+assert.deepEqual(Array.from(api.buildPortExcelBytes(migratedOutput).slice(0, 4)), [0x50, 0x4b, 0x03, 0x04], 'Excel must hydrate IndexedDB photos in memory');
+assert.match(api.buildPortPdfHtml(migratedOutput), /data:image\/jpeg;base64,/, 'PDF must hydrate IndexedDB photos in memory');
+const backupDocument = await api.createPortBackupDocument(migratedReload);
+assert.match(backupDocument.data.spans[0].inspections[caissonTargets[0].id].photos[0].data, /^data:image\/jpeg;base64,/);
+const restoredBackupState = api.normalizePortState(JSON.parse(JSON.stringify(backupDocument.data)));
+let restoredMetadata = '';
+await api.installPortBackupState(restoredBackupState, (value) => { restoredMetadata = JSON.stringify(value); }, legacyIdbState);
+assert.doesNotMatch(restoredMetadata, /data:image\//, 'restore must put photo bodies in IndexedDB, not localStorage');
+assert.ok((await api.portPhotoBlobGet('legacy-idb-2')) instanceof Blob);
+await api.portPhotoBlobDelete('legacy-idb-1');
+assert.equal(await api.portPhotoBlobGet('legacy-idb-1'), undefined, 'photo deletion must remove only its own Blob');
+assert.ok((await api.portPhotoBlobGet('legacy-idb-2')) instanceof Blob, 'photo deletion must preserve other Blobs');
+assert.deepEqual({ ...(await api.requestPortStoragePersistence()) }, { estimate: null, persisted: null }, 'storage estimate/persistence must be best effort');
+
+const failedLegacyState = api.createPortState(); failedLegacyState.structureId = caisson.id;
+const failedLegacyRecord = api.ensurePortInspection(failedLegacyState.spans[0], caissonTargets[0]);
+failedLegacyRecord.photos.push(api.createPortPhoto(caissonTargets[0], failedLegacyState.spans[0], { id: 'legacy-fail', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' }));
+api.setPortPhotoStoreForTests({ ...memoryPhotoStore, async put() { throw Object.assign(new Error('quota'), { name: 'QuotaExceededError' }); } });
+await assert.rejects(api.migrateLegacyPortPhotos(failedLegacyState, () => {}));
+assert.match(failedLegacyRecord.photos[0].data, /^data:image\//, 'failed migration must retain the old Base64 photo');
+api.setPortPhotoStoreForTests(memoryPhotoStore);
 
 const ambiguousSpecifications = [
   ['ケーソン式防波堤', '施設全体'],
@@ -733,7 +788,19 @@ assert.match(source, /appendPortPhoto\(portState,portUiMode,captureSpanId,captur
 assert.match(source, /portState\.activeSpanId=captureSpanId;portState\.view='span'/);
 assert.match(source, /portPhotoImageProfile\(portUiMode\)/);
 assert.match(source, /rollbackPortPhotos\(captureSpan,addedPhotoIds,targets\)/);
-assert.match(source, /写真の保存容量が上限に達しました。不要な写真を削除してから再撮影してください。/);
+assert.match(source, /写真を保存できませんでした。端末の保存容量を確認してください。/);
+assert.match(source, /PORT_PHOTO_DB_NAME='ijikannri-port-photos-v1'/);
+assert.match(source, /PORT_PHOTO_STORE='photos'/);
+assert.match(source, /objectStore\(PORT_PHOTO_STORE\)\.put\(blob,photoId\)/);
+assert.match(source, /canvas\.toBlob/);
+assert.match(source, /await portPhotoBlobPut\(photoId,converted\.blob\)/);
+assert.doesNotMatch(source.match(/async function addPortPhotos[\s\S]*?\nfunction advancePort/)?.[0] || '', /data:converted\.data/);
+assert.match(source, /async function migrateLegacyPortPhotos/);
+assert.match(source, /delete photo\.data;saveState\(\)/);
+assert.match(source, /async function buildPortOutputDataWithPhotos/);
+assert.match(source, /async function createPortBackupDocument/);
+assert.match(source, /navigator\?\.storage\?\.estimate/);
+assert.match(source, /navigator\?\.storage\?\.persist/);
 assert.match(source, /PORT_COMMENT_VALUES=\['あり','なし'\]/);
 assert.match(source, /data-port-photo-source/);
 assert.match(source, /data-port-action="new-target"/);
