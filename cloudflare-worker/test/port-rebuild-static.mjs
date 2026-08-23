@@ -231,6 +231,28 @@ api.reindexPortSpanPhotos(spanNavigationReload.spans[1]);
 assert.equal(api.portSpanPhotoEntries(spanNavigationReload.spans[1]).length, 0);
 assert.equal(api.setPortNavigation(spanNavigationReload, 'summary'), true, 'navigation must remain usable after photo deletion');
 
+assert.equal(api.portPhotoImageProfile('mobile').maxDimension, 1024);
+assert.equal(api.portPhotoImageProfile('mobile').quality, 0.68);
+assert.equal(api.portPhotoImageProfile('pc').maxDimension, 1800, 'desktop photo encoding must remain unchanged');
+assert.equal(api.portPhotoImageProfile('pc').quality, 0.84, 'desktop photo encoding must remain unchanged');
+const quotaError = Object.assign(new Error('The quota has been exceeded'), { name: 'QuotaExceededError' });
+assert.equal(api.isPortStorageQuotaError(quotaError), true);
+const threeSpanStorageState = api.createPortState();
+threeSpanStorageState.structureId = caisson.id;
+api.resizePortSpans(threeSpanStorageState, 3);
+for (const [index, span] of threeSpanStorageState.spans.entries()) {
+  api.appendPortPhoto(threeSpanStorageState, 'mobile', span.id, caissonTargets[0].id, '', { id: `quota-span-${index + 1}`, data: `data:image/jpeg;base64,${'A'.repeat(600000)}`, mimeType: 'image/jpeg' });
+}
+const threeSpanStorageJson = JSON.stringify(threeSpanStorageState);
+assert.ok(threeSpanStorageJson.length * 2 < 5 * 1024 * 1024, 'three representative compressed mobile photos must fit a conservative 5 MiB UTF-16 budget');
+assert.deepEqual(Array.from(threeSpanStorageState.spans, (span) => api.portSpanPhotoEntries(span).length), [1, 1, 1]);
+assert.equal(api.setPortNavigation(threeSpanStorageState, 'summary'), true);
+assert.equal(api.setPortNavigation(threeSpanStorageState, 'span', threeSpanStorageState.spans[1].id), true);
+const rollbackCandidate = api.appendPortPhoto(threeSpanStorageState, 'mobile', threeSpanStorageState.spans[1].id, caissonTargets[0].id, '', { id: 'quota-rollback', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
+api.rollbackPortPhotos(threeSpanStorageState.spans[1], [rollbackCandidate.photo.id], caissonTargets);
+assert.deepEqual(Array.from(api.portSpanPhotoEntries(threeSpanStorageState.spans[1]), (entry) => entry.photo.id), ['quota-span-2'], 'quota rollback must remove only the failed addition');
+assert.equal(api.setPortNavigation(threeSpanStorageState, 'summary'), true, 'navigation must remain usable after quota rollback');
+
 const ambiguousSpecifications = [
   ['ケーソン式防波堤', '施設全体'],
   ['ブロック式防波堤', '施設全体'],
@@ -709,6 +731,9 @@ assert.match(source, /capture="environment"/);
 assert.match(source, /data-port-photo-span="\$\{span\.id\}" data-port-photo-target="\$\{target\.id\}"/);
 assert.match(source, /appendPortPhoto\(portState,portUiMode,captureSpanId,captureTargetId/);
 assert.match(source, /portState\.activeSpanId=captureSpanId;portState\.view='span'/);
+assert.match(source, /portPhotoImageProfile\(portUiMode\)/);
+assert.match(source, /rollbackPortPhotos\(captureSpan,addedPhotoIds,targets\)/);
+assert.match(source, /写真の保存容量が上限に達しました。不要な写真を削除してから再撮影してください。/);
 assert.match(source, /PORT_COMMENT_VALUES=\['あり','なし'\]/);
 assert.match(source, /data-port-photo-source/);
 assert.match(source, /data-port-action="new-target"/);
@@ -719,6 +744,11 @@ assert.match(index, /\.port-mobile-nav-wrap\{display:none\}/);
 assert.match(index, /\.port-ui-mobile \.port-mobile-nav-wrap\{display:block;position:sticky/);
 assert.match(index, /\.port-ui-mobile #port-nav\{display:none\}/);
 assert.match(index, /\.port-ui-pc #port-nav\{position:static;display:grid/);
+assert.match(index, /\.port-ui-mobile \.port-card \.primary,\.port-ui-mobile \.port-next \.primary\{background:#17643b;color:#fff\}/);
+assert.match(index, /\.port-ui-mobile \.port-card \.primary:hover,[^}]+\{background:#145a35;color:#fff\}/);
+assert.match(index, /\.port-ui-mobile \.port-card \.primary:active,[^}]+\{background:#0f472a;color:#fff\}/);
+assert.match(index, /\.port-ui-mobile \.port-card \.primary:disabled,[^}]+\{background:#607a69;color:#fff;opacity:1;cursor:not-allowed\}/);
+assert.ok(index.lastIndexOf('.port-ui-mobile .port-card .primary') > index.indexOf('.port-form label,.port-card label'), 'mobile contrast override must follow the generic green label color');
 assert.match(source, /function buildPortSummaryMatrix/);
 assert.match(source, /sourceSheets:\['00_使用方法','13_評価基準'\]/);
 assert.match(source, /function portSpanItemRepresentative/);
