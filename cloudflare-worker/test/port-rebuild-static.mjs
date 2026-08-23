@@ -394,18 +394,84 @@ assert.deepEqual({ ...matrixRow('エプロン').cells[0].counts }, { a: 1, b: 0,
 assert.equal(api.portMatrixCellText(matrixRow('エプロン').cells[0]), 'a×1 / c×2');
 assert.equal(api.portMatrixCellText(matrixRow('ケーソン').cells[0]), 'S');
 assert.equal(api.portMatrixCellText(matrixRow('上部工（無筋）').cells[1]), '－');
-assert.equal(matrixSummary.performance.ruleAvailable, false);
-assert.equal(matrixSummary.performance.componentRatings.find((row) => row.component === '岸壁法線').rating, null);
+assert.equal(matrixSummary.performance.ruleAvailable, true);
+assert.equal(matrixSummary.performance.componentRatings.find((row) => row.component === '岸壁法線').rating, 'A');
 assert.equal(matrixSummary.performance.facilityRating, null);
+assert.equal(matrixSummary.performance.facilityStatus, 'pending');
 assert.deepEqual(Array.from(matrixSummary.performance.sourceSheets), ['00_使用方法', '13_評価基準']);
-assert.match(matrixSummary.performance.missingRule, /複数の写真判定/);
 const matrixHtml = api.portSummaryMatrixView(matrixSummary.matrix);
 assert.match(matrixHtml, /<th>部材<\/th><th>スパン1<\/th><th>スパン2<\/th>/);
 assert.match(matrixHtml, /a×1/);
 assert.match(matrixHtml, /a×1 \/ c×2/);
 assert.match(matrixHtml, />S<\/td>/);
-assert.match(api.portPerformanceView(matrixSummary.performance), /施設全体 性能低下度/);
-assert.match(api.portPerformanceView(matrixSummary.performance), /<strong>判定規則未設定<\/strong>/);
+assert.match(api.portPerformanceView(matrixSummary.performance), /施設全体 性能低下度（一次判定）/);
+assert.match(api.portPerformanceView(matrixSummary.performance), /<strong>判定保留<\/strong>/);
+assert.match(api.portPerformanceView(matrixSummary.performance), /性能低下度は自動一次判定です/);
+
+const representativeTarget = { id: 'representative-item' };
+const representativeSpan = { id: 'representative-span', number: 1 };
+const representative = (ratings, status = 'completed') => api.portSpanItemRepresentative({
+  span: representativeSpan,
+  target: representativeTarget,
+  status,
+  photos: ratings.map((rating) => ({ photo: { rating } })),
+});
+assert.equal(representative(['c', 'a', 'b']).rating, 'a', 'c,a,b must aggregate to representative a');
+assert.equal(representative(['d', 'c']).rating, 'c', 'd,c must aggregate to representative c');
+assert.equal(representative(['a', null]).status, 'pending', 'one unrated photo must keep the representative pending');
+assert.equal(representative([], 'skipped').status, 'excluded', 'skipped target without photos must be excluded');
+
+assert.equal(api.portInspectionPerformanceRating('Ⅰ類', { a: 1, b: 0, c: 0, d: 2 }), 'A');
+assert.equal(api.portInspectionPerformanceRating('Ⅰ類', { a: 0, b: 1, c: 2, d: 0 }), 'B');
+assert.equal(api.portInspectionPerformanceRating('Ⅰ類', { a: 0, b: 0, c: 1, d: 2 }), 'C');
+assert.equal(api.portInspectionPerformanceRating('Ⅰ類', { a: 0, b: 0, c: 0, d: 3 }), 'D');
+assert.equal(api.portInspectionPerformanceRating('Ⅱ類', { a: 5, b: 0, c: 5, d: 0 }), 'A', '50% a boundary must be A');
+assert.equal(api.portInspectionPerformanceRating('Ⅱ類', { a: 0, b: 8, c: 2, d: 0 }), 'A', '80% a+b boundary must be A');
+assert.equal(api.portInspectionPerformanceRating('Ⅱ類', { a: 1, b: 0, c: 9, d: 0 }), 'B');
+assert.equal(api.portInspectionPerformanceRating('Ⅱ類', { a: 0, b: 5, c: 5, d: 0 }), 'B', '50% a+b boundary must be B when A is false');
+assert.equal(api.portInspectionPerformanceRating('Ⅱ類', { a: 0, b: 0, c: 2, d: 8 }), 'C');
+assert.equal(api.portInspectionPerformanceRating('Ⅱ類', { a: 0, b: 0, c: 0, d: 10 }), 'D');
+assert.equal(api.portInspectionPerformanceRating('Ⅲ類', { a: 1, b: 0, c: 0, d: 1 }), 'C', 'class III must not auto-rate A/B');
+assert.equal(api.portInspectionPerformanceRating('Ⅲ類', { a: 0, b: 0, c: 0, d: 2 }), 'D');
+
+const performanceSpans = [{ id: 'performance-span-1', number: 1 }, { id: 'performance-span-2', number: 2 }];
+const performanceTargets = [
+  { id: 'performance-i', criteriaSetId: 'set-i', component: '共通部材', diagnosisItem: 'Ⅰ類項目', classification: 'Ⅰ類' },
+  { id: 'performance-iii', criteriaSetId: 'set-iii', component: '共通部材', diagnosisItem: 'Ⅲ類項目', classification: 'Ⅲ類' },
+  { id: 'performance-ii', criteriaSetId: 'set-ii', component: '別部材', diagnosisItem: 'Ⅱ類項目', classification: 'Ⅱ類' },
+  { id: 'performance-skip', criteriaSetId: 'set-skip', component: '除外部材', diagnosisItem: '除外項目', classification: 'Ⅰ類' },
+];
+const performancePhoto = (rating) => ({ photo: { rating } });
+const performanceTargetResults = [
+  { span: performanceSpans[0], target: performanceTargets[0], status: 'completed', photos: ['c', 'a', 'b'].map(performancePhoto) },
+  { span: performanceSpans[1], target: performanceTargets[0], status: 'completed', photos: ['d'].map(performancePhoto) },
+  { span: performanceSpans[0], target: performanceTargets[1], status: 'completed', photos: ['d'].map(performancePhoto) },
+  { span: performanceSpans[1], target: performanceTargets[1], status: 'completed', photos: ['d'].map(performancePhoto) },
+  { span: performanceSpans[0], target: performanceTargets[2], status: 'completed', photos: ['b'].map(performancePhoto) },
+  { span: performanceSpans[1], target: performanceTargets[2], status: 'completed', photos: ['c'].map(performancePhoto) },
+  { span: performanceSpans[0], target: performanceTargets[3], status: 'skipped', photos: [] },
+  { span: performanceSpans[1], target: performanceTargets[3], status: 'skipped', photos: [] },
+];
+const performanceCollected = { targets: performanceTargets, targetResults: performanceTargetResults, photoResults: [] };
+const photoRatingSnapshot = performanceTargetResults.flatMap((row) => row.photos.map((entry) => entry.photo.rating));
+let performance = api.buildPortPerformanceRatings({ spans: performanceSpans }, performanceCollected);
+assert.equal(performance.itemRatings.find((item) => item.inspectionItemId === 'performance-i').rating, 'A');
+assert.equal(performance.itemRatings.find((item) => item.inspectionItemId === 'performance-iii').rating, 'D');
+assert.equal(performance.itemRatings.find((item) => item.inspectionItemId === 'performance-ii').rating, 'B');
+assert.equal(performance.itemRatings.find((item) => item.inspectionItemId === 'performance-skip').status, 'not-applicable');
+assert.equal(performance.componentRatings.find((row) => row.component === '共通部材').rating, 'A', 'component must use strictest item A-D');
+assert.equal(performance.componentRatings.find((row) => row.component === '別部材').rating, 'B');
+assert.equal(performance.componentRatings.find((row) => row.component === '除外部材').status, 'not-applicable');
+assert.equal(performance.facilityRating, 'A', 'facility must use strictest item A-D');
+assert.equal(performance.facilityStatus, 'rated');
+assert.deepEqual(performanceTargetResults.flatMap((row) => row.photos.map((entry) => entry.photo.rating)), photoRatingSnapshot, 'performance aggregation must not mutate photo ratings');
+performanceTargetResults.find((row) => row.target.id === 'performance-ii').photos.push(performancePhoto(null));
+performance = api.buildPortPerformanceRatings({ spans: performanceSpans }, performanceCollected);
+assert.equal(performance.itemRatings.find((item) => item.inspectionItemId === 'performance-ii').status, 'pending');
+assert.equal(performance.componentRatings.find((row) => row.component === '別部材').status, 'pending');
+assert.equal(performance.facilityStatus, 'pending', 'one pending item must hold the facility rating');
+assert.equal(performance.facilityRating, null);
+performanceTargetResults.find((row) => row.target.id === 'performance-ii').photos.pop();
 
 assert.equal(api.setPortPhotoComponent(matrixApronPhoto2, '上部工（RC）', matrixTargets).status, 'resolved');
 Object.assign(matrixApronPhoto2, { rating: 'd', ratedAt: '2026-08-22T04:00:00.000Z', conditionComment: 'その他', conditionFreeText: '部材変更後' });
@@ -439,7 +505,8 @@ assert.ok(!Object.hasOwn(migrated, 'rating') && !Object.hasOwn(migrated, 'condit
 assert.equal(migrated.status, 'completed');
 
 const output = api.buildPortOutputData(state);
-assert.equal(output.summary.performance.ruleAvailable, false, 'Excel/PDF共通出力データ must retain the future performance-rating structure without inventing a rule');
+assert.equal(output.summary.performance.ruleAvailable, true, 'Excel/PDF共通出力データ must use the common performance-rating result');
+assert.equal(output.summary.performance.facilityStatus, 'pending');
 assert.equal(output.itemCounts.find((item) => item.id === first.photos[0].inspectionItemId).counts.a, 1);
 assert.equal(output.itemCounts.find((item) => item.id === first.photos[1].inspectionItemId).counts.c, 1);
 assert.equal(output.itemCounts.find((item) => item.id === first.photos[2].inspectionItemId).counts.d, 1);
@@ -465,12 +532,39 @@ const summaryXml = new TextDecoder().decode(entries.get('xl/worksheets/sheet1.xm
 const photoXml = new TextDecoder().decode(entries.get('xl/worksheets/sheet2.xml'));
 assert.match(summaryXml, /a判定写真数/);
 assert.match(summaryXml, /c判定写真数/);
+assert.match(summaryXml, /部材別 性能低下度（一次判定）/);
+assert.match(summaryXml, /施設全体 性能低下度（一次判定）/);
+assert.match(summaryXml, /判定保留/);
 for (const expected of ['岸壁法線', 'エプロン', '上部工（RC）', '凹凸・出入り', '沈下・陥没', 'コンクリートの劣化・損傷', 'コメントA', 'コメントC', 'コメントD', '>a<', '>c<', '>d<']) assert.ok(photoXml.includes(expected), `Excel missing ${expected}`);
 const pdfHtml = api.buildPortPdfHtml(output);
 assert.match(pdfHtml, /点検診断・a～d評価集計/);
 assert.match(pdfHtml, /スパン1 写真帳/);
 assert.match(pdfHtml, /スキップ記録/);
+assert.match(pdfHtml, /部材別 性能低下度（一次判定）/);
+assert.match(pdfHtml, /施設全体 性能低下度（一次判定）/);
+assert.match(pdfHtml, /性能低下度は自動一次判定です/);
 for (const expected of ['岸壁法線', 'エプロン', '上部工（RC）', '凹凸・出入り', '沈下・陥没', 'コンクリートの劣化・損傷', '評価 a', '評価 c', '評価 d', 'コメントA', 'コメントC', 'コメントD']) assert.ok(pdfHtml.includes(expected), `PDF missing ${expected}`);
+
+const completedState = api.createPortState(); completedState.structureId = structure.id; api.resizePortSpans(completedState, 2);
+const completedTargets = api.portTargetsForStructure(structure.id);
+for (const span of completedState.spans) for (const [targetIndex, target] of completedTargets.entries()) {
+  const record = api.ensurePortInspection(span, target);
+  const rating = span.number === 1 && targetIndex === 0 ? 'a' : 'd';
+  const photo = api.createPortPhoto(target, span, { id: `completed-${span.number}-${targetIndex}`, data: jpeg, mimeType: 'image/jpeg' });
+  Object.assign(photo, { rating, ratedAt: '2026-08-23T00:00:00.000Z', conditionComment: 'その他', conditionFreeText: '完了確認' });
+  record.photos.push(photo); api.refreshPortInspectionStatus(record, completedTargets);
+}
+const completedOutput = api.buildPortOutputData(completedState);
+assert.equal(completedOutput.summary.performance.itemRatings.every((item) => item.status === 'rated'), true);
+assert.equal(completedOutput.summary.performance.componentRatings.find((row) => row.component === '岸壁法線').rating, 'A');
+assert.equal(completedOutput.summary.performance.facilityRating, 'A');
+assert.equal(completedOutput.summary.performance.facilityStatus, 'rated');
+const completedExcelEntries = storedZipEntries(api.buildPortExcelBytes(completedOutput));
+const completedSummaryXml = new TextDecoder().decode(completedExcelEntries.get('xl/worksheets/sheet1.xml'));
+assert.match(completedSummaryXml, /施設全体 性能低下度（一次判定）/);
+assert.match(completedSummaryXml, /<t xml:space="preserve">A<\/t>/, 'Excel must contain the common facility A rating');
+const completedPdfHtml = api.buildPortPdfHtml(completedOutput);
+assert.match(completedPdfHtml, /施設全体 性能低下度（一次判定） <strong>A<\/strong>/, 'PDF must contain the common facility A rating');
 
 const keptPhoto = first.photos[1];
 first.photos.splice(0, 1);
@@ -509,9 +603,12 @@ assert.match(source, /capture="environment"/);
 assert.match(index, /\.port-ui-mobile \.port-photos\{grid-template-columns:1fr\}/);
 assert.match(source, /function buildPortSummaryMatrix/);
 assert.match(source, /sourceSheets:\['00_使用方法','13_評価基準'\]/);
-assert.match(source, /missingRule:'同一スパン・同一点検項目に複数の写真判定/);
+assert.match(source, /function portSpanItemRepresentative/);
+assert.match(source, /function portInspectionPerformanceRating/);
+assert.match(source, /thresholds:\{majority:\.5,almost:\.8\}/);
 assert.match(source, /スパン別・部材別 a～d判定/);
 assert.match(source, /部材別 性能低下度/);
+assert.doesNotMatch(source, /判定規則未設定/);
 assert.doesNotMatch(source, /detailsTable\('a判定写真'/);
 assert.doesNotMatch(source, /detailsTable\('未評価箇所'/);
 assert.match(index, /\.port-summary-matrix\{overflow-x:auto/);
