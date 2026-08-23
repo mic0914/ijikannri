@@ -362,6 +362,124 @@ assert.equal(ambiguousPhoto.rating, null, 'changing the inspection item must cle
 assert.equal(ambiguousPhoto.conditionFreeText, '');
 assert.equal(api.portPhotoSelectionModel(ambiguousPhoto, breakwaterTargets).item.criteria.a, facilityCandidates[1].criteria.a, 'criteria must follow the selected inspection item');
 
+assert.deepEqual(Array.from(breakwaterTargets, (target) => ({
+  inspectionItemId: target.id,
+  component: target.component,
+  diagnosisItem: target.diagnosisItem,
+  classification: target.classification,
+  criteriaSetId: target.criteriaSetId,
+})), [
+  { inspectionItemId: 'criteria_03_item_001', component: '施設全体', diagnosisItem: '移動', classification: 'Ⅰ類', criteriaSetId: 'criteria_03' },
+  { inspectionItemId: 'criteria_03_item_002', component: 'ケーソン', diagnosisItem: 'コンクリートの劣化・損傷', classification: 'Ⅰ類', criteriaSetId: 'criteria_03' },
+  { inspectionItemId: 'criteria_03_item_003', component: '施設全体', diagnosisItem: '沈下', classification: 'Ⅱ類', criteriaSetId: 'criteria_03' },
+  { inspectionItemId: 'criteria_03_item_004', component: '上部工', diagnosisItem: 'コンクリートの劣化・損傷', classification: 'Ⅱ類', criteriaSetId: 'criteria_03' },
+  { inspectionItemId: 'criteria_03_item_005', component: '消波工', diagnosisItem: '移動・散乱・沈下', classification: 'Ⅱ類', criteriaSetId: 'criteria_03' },
+  { inspectionItemId: 'criteria_03_item_006', component: '消波工', diagnosisItem: '損傷・欠損', classification: 'Ⅱ類', criteriaSetId: 'criteria_03' },
+], 'performance population must contain only the six items referenced by the selected structure');
+
+function createFiveSpanBreakwaterState(ratingFor = () => 'd') {
+  const state = api.createPortState(); state.facilityCategoryId = 'category_02'; state.structureId = caissonBreakwater.id;
+  api.resizePortSpans(state, 5);
+  for (const span of state.spans) for (const [targetIndex, target] of breakwaterTargets.entries()) {
+    const record = api.ensurePortInspection(span, target);
+    const photo = api.createPortPhoto(target, span, { id: `breakwater-${span.number}-${target.id}`, data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
+    Object.assign(photo, { rating: ratingFor(span, target, targetIndex), ratedAt: '2026-08-23T00:00:00.000Z', conditionComment: 'なし', conditionFreeText: '' });
+    record.photos.push(photo);
+  }
+  state.spans.forEach((span) => api.refreshPortSpanStatuses(span, breakwaterTargets));
+  return state;
+}
+
+// Case A: every valid inspection item in all five spans has an a-d rating.
+const breakwaterAllEntered = createFiveSpanBreakwaterState((span, target, targetIndex) => ['a', 'b', 'c', 'd'][(span.number + targetIndex) % 4]);
+const outsideTarget = caissonTargets[0];
+breakwaterAllEntered.spans[0].inspections[outsideTarget.id] = { inspectionItemId: outsideTarget.id, criteriaSetId: outsideTarget.criteriaSetId, component: outsideTarget.component, status: 'pending', skipped: false, photos: [] };
+const breakwaterAllPerformance = api.buildPortPerformanceRatings(breakwaterAllEntered);
+assert.deepEqual(Array.from(breakwaterAllPerformance.itemRatings, (row) => row.inspectionItemId), Array.from(breakwaterTargets, (target) => target.id), 'items outside the selected structure must not enter the performance population');
+assert.equal(breakwaterAllPerformance.spanRepresentatives.length, 30);
+assert.ok(breakwaterAllPerformance.spanRepresentatives.every((row) => row.status === 'rated'));
+assert.ok(breakwaterAllPerformance.itemRatings.every((row) => row.status === 'rated' && ['A', 'B', 'C', 'D'].includes(row.rating)));
+assert.ok(breakwaterAllPerformance.componentRatings.every((row) => row.status === 'rated' && ['A', 'B', 'C', 'D'].includes(row.rating)));
+assert.equal(breakwaterAllPerformance.facilityStatus, 'rated');
+assert.ok(['A', 'B', 'C', 'D'].includes(breakwaterAllPerformance.facilityRating));
+assert.doesNotMatch(api.portPerformanceView(breakwaterAllPerformance), /判定保留/);
+console.log(`caisson breakwater completed debug: ${JSON.stringify(breakwaterAllPerformance.itemRatings.map((item) => ({ inspectionItemId: item.inspectionItemId, component: item.component, diagnosisItem: item.diagnosisItem, classification: item.classification, criteriaSetId: item.criteriaSetId, spans: item.representatives.map((row) => ({ span: row.spanNumber, representative: row.rating, status: row.status })), itemRating: item.rating, itemStatus: item.status, holdReason: item.status === 'pending' ? 'required representative missing' : '' })))}`);
+
+// Case B: all a must produce facility A under the existing classification rules.
+const breakwaterAllA = createFiveSpanBreakwaterState(() => 'a');
+const breakwaterAllAPerformance = api.buildPortPerformanceRatings(breakwaterAllA);
+assert.ok(breakwaterAllAPerformance.itemRatings.every((row) => row.rating === 'A' && row.status === 'rated'));
+assert.ok(breakwaterAllAPerformance.componentRatings.every((row) => row.rating === 'A' && row.status === 'rated'));
+assert.equal(breakwaterAllAPerformance.facilityRating, 'A');
+assert.equal(breakwaterAllAPerformance.facilityStatus, 'rated');
+
+// Cases C/D: one truly unrated photo holds only its item/component/facility, then clears immediately when rated.
+const heldState = createFiveSpanBreakwaterState(() => 'd');
+const heldPhoto = api.findPortPhoto(heldState.spans[2], 'breakwater-3-criteria_03_item_003').photo;
+heldPhoto.rating = null; heldPhoto.ratedAt = null;
+let heldPerformance = api.buildPortPerformanceRatings(heldState);
+let heldItem = heldPerformance.itemRatings.find((row) => row.inspectionItemId === 'criteria_03_item_003');
+assert.equal(heldItem.status, 'pending');
+assert.equal(heldItem.representatives.find((row) => row.spanNumber === 3).status, 'pending');
+assert.equal(heldPerformance.componentRatings.find((row) => row.component === '施設全体').status, 'pending');
+assert.equal(heldPerformance.facilityStatus, 'pending');
+heldPhoto.rating = 'd'; heldPhoto.ratedAt = '2026-08-23T00:01:00.000Z';
+heldPerformance = api.buildPortPerformanceRatings(heldState);
+heldItem = heldPerformance.itemRatings.find((row) => row.inspectionItemId === 'criteria_03_item_003');
+assert.equal(heldItem.rating, 'D'); assert.equal(heldItem.status, 'rated');
+assert.equal(heldPerformance.componentRatings.find((row) => row.component === '施設全体').rating, 'D');
+assert.equal(heldPerformance.facilityRating, 'D'); assert.equal(heldPerformance.facilityStatus, 'rated');
+
+// Case E: an all-span skipped/non-applicable item is excluded without creating a pending rating.
+const skippedState = createFiveSpanBreakwaterState(() => 'd');
+for (const span of skippedState.spans) {
+  const record = api.ensurePortInspection(span, breakwaterTargets[5]);
+  record.photos = []; record.skipped = true; record.skipReason = '該当なし'; record.status = 'skipped';
+}
+const skippedPerformance = api.buildPortPerformanceRatings(skippedState);
+assert.equal(skippedPerformance.itemRatings.find((row) => row.inspectionItemId === 'criteria_03_item_006').status, 'not-applicable');
+assert.equal(skippedPerformance.componentRatings.find((row) => row.component === '消波工').rating, 'D');
+assert.equal(skippedPerformance.facilityRating, 'D'); assert.equal(skippedPerformance.facilityStatus, 'rated');
+
+// Case F/root-cause reproduction: sourceTargetId completion must not conceal a missing actual inspectionItemId.
+const reassignedState = createFiveSpanBreakwaterState(() => 'd');
+for (const span of reassignedState.spans) for (const [missingId, replacementId] of [['criteria_03_item_003', 'criteria_03_item_001'], ['criteria_03_item_006', 'criteria_03_item_005']]) {
+  const photo = api.findPortPhoto(span, `breakwater-${span.number}-${missingId}`).photo;
+  api.setPortPhotoComponent(photo, breakwaterTargets.find((target) => target.id === replacementId).component, breakwaterTargets);
+  api.setPortPhotoInspectionItem(photo, replacementId, breakwaterTargets);
+  Object.assign(photo, { rating: 'd', ratedAt: '2026-08-23T00:02:00.000Z', conditionComment: 'なし', conditionFreeText: '' });
+  const sourceTarget = breakwaterTargets.find((target) => target.id === missingId);
+  assert.equal(api.portTargetStatus(span, sourceTarget, breakwaterTargets), 'pending');
+  assert.equal(api.portMobileTargetReady(span, sourceTarget, breakwaterTargets), false, 'sourceTargetId alone must not complete a different inspection item');
+  assert.equal(api.portTargetIncompleteReason(span, sourceTarget, breakwaterTargets), 'この点検対象に紐づく評価済み写真がありません。');
+}
+let reassignedPerformance = api.buildPortPerformanceRatings(reassignedState);
+const pendingDebug = reassignedPerformance.itemRatings.filter((item) => item.status === 'pending').flatMap((item) => item.representatives.filter((row) => row.status === 'pending').map((row) => ({
+  inspectionItemId: item.inspectionItemId,
+  component: item.component,
+  diagnosisItem: item.diagnosisItem,
+  classification: item.classification,
+  criteriaSetId: item.criteriaSetId,
+  span: row.spanNumber,
+  representative: row.rating,
+  status: row.status,
+  reason: row.photoCount ? 'unrated photo remains' : 'representative rating missing',
+})));
+assert.deepEqual([...new Set(pendingDebug.map((row) => row.inspectionItemId))], ['criteria_03_item_003', 'criteria_03_item_006']);
+assert.equal(pendingDebug.length, 10);
+console.log(`caisson breakwater pending debug: ${JSON.stringify(pendingDebug)}`);
+for (const span of reassignedState.spans) for (const missingId of ['criteria_03_item_003', 'criteria_03_item_006']) {
+  const photo = api.findPortPhoto(span, `breakwater-${span.number}-${missingId}`).photo;
+  const target = breakwaterTargets.find((candidate) => candidate.id === missingId);
+  api.setPortPhotoComponent(photo, target.component, breakwaterTargets);
+  api.setPortPhotoInspectionItem(photo, missingId, breakwaterTargets);
+  Object.assign(photo, { rating: 'd', ratedAt: '2026-08-23T00:03:00.000Z', conditionComment: 'なし', conditionFreeText: '' });
+}
+reassignedPerformance = api.buildPortPerformanceRatings(reassignedState);
+assert.ok(reassignedPerformance.itemRatings.every((row) => row.status === 'rated' && row.rating === 'D'));
+assert.ok(reassignedPerformance.componentRatings.every((row) => row.status === 'rated' && row.rating === 'D'));
+assert.equal(reassignedPerformance.facilityRating, 'D'); assert.equal(reassignedPerformance.facilityStatus, 'rated');
+
 let multipleComponentCases = 0;
 for (const candidateStructure of structures) {
   const candidateTargets = api.portTargetsForStructure(candidateStructure.id);
