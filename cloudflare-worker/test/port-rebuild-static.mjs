@@ -498,6 +498,70 @@ const duplicateBefore = JSON.stringify(api.portSpanPhotoEntries(duplicateSpan).f
 assert.equal(api.updatePortPhotoComponent(duplicateSpan, 'trace-P1', '上部工', breakwaterTargets).status, 'duplicate');
 assert.equal(JSON.stringify(api.portSpanPhotoEntries(duplicateSpan).filter(({ photo }) => photo.id === 'trace-P1').map(({ photo }) => photo)), duplicateBefore, 'duplicate IDs must fail closed instead of updating the wrong sibling photo');
 
+// Ambiguous component selection stays in memory until an inspection item is explicitly selected.
+const deferredState = api.createPortState(); deferredState.structureId = caissonBreakwater.id;
+const deferredSpan = deferredState.spans[0], deferredSource = breakwaterTargets.find((target) => target.component === 'ケーソン');
+const deferredP1 = api.appendPortPhoto(deferredState, 'mobile', deferredSpan.id, deferredSource.id, '', { id: 'deferred-P1', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' }).photo;
+Object.assign(deferredP1, { rating: 'a', ratedAt: '2026-08-23T03:00:00.000Z', conditionComment: 'なし', conditionFreeText: '' });
+const deferredP2 = api.appendPortPhoto(deferredState, 'mobile', deferredSpan.id, deferredSource.id, deferredP1.id, { id: 'deferred-P2', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' }).photo;
+api.stagePortPhotoComponentSelection(deferredSpan, deferredP2.id, '上部工', breakwaterTargets);
+Object.assign(api.findPortPhoto(deferredSpan, deferredP2.id).photo, { rating: 'b', ratedAt: '2026-08-23T03:01:00.000Z', conditionComment: 'なし', conditionFreeText: '' });
+const deferredP3 = api.appendPortPhoto(deferredState, 'mobile', deferredSpan.id, api.findPortPhoto(deferredSpan, deferredP2.id).photo.inspectionItemId, deferredP2.id, { id: 'deferred-P3', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' }).photo;
+const deferredBefore = JSON.stringify({
+  p1: api.findPortPhoto(deferredSpan, deferredP1.id).photo,
+  p2: api.findPortPhoto(deferredSpan, deferredP2.id).photo,
+  p3: api.findPortPhoto(deferredSpan, deferredP3.id).photo,
+  parent: api.findPortPhoto(deferredSpan, deferredP3.id).record.inspectionItemId,
+});
+const deferredStage = api.stagePortPhotoComponentSelection(deferredSpan, deferredP3.id, '消波工', breakwaterTargets);
+assert.equal(deferredStage.status, 'choice-required');
+assert.equal(JSON.stringify({
+  p1: api.findPortPhoto(deferredSpan, deferredP1.id).photo,
+  p2: api.findPortPhoto(deferredSpan, deferredP2.id).photo,
+  p3: api.findPortPhoto(deferredSpan, deferredP3.id).photo,
+  parent: api.findPortPhoto(deferredSpan, deferredP3.id).record.inspectionItemId,
+}), deferredBefore, 'ambiguous component selection must not mutate any persisted photo or parent inspection');
+let deferredUi = api.portPhotoFields(api.findPortPhoto(deferredSpan, deferredP3.id).photo, breakwaterTargets);
+assert.match(deferredUi, /<option selected>消波工<\/option>/, 'the pending component is shown without persisting it');
+assert.match(deferredUi, /data-port-photo-inspection-item="deferred-P3"/);
+assert.match(deferredUi, /<option value="criteria_03_item_005"[^>]*>移動・散乱・沈下<\/option>/);
+assert.match(deferredUi, /<option value="criteria_03_item_006"[^>]*>損傷・欠損<\/option>/);
+assert.match(deferredUi, /data-port-photo-rating="deferred-P3"[^>]*disabled/);
+const deferredPersistedBeforeCommit = JSON.parse(JSON.stringify(deferredState));
+assert.equal(api.findPortPhoto(deferredPersistedBeforeCommit.spans[0], deferredP3.id).photo.component, '上部工');
+assert.equal(api.findPortPhoto(deferredPersistedBeforeCommit.spans[0], deferredP3.id).photo.inspectionItemId, 'criteria_03_item_004');
+assert.equal(api.findPortPhoto(deferredPersistedBeforeCommit.spans[0], deferredP3.id).record.inspectionItemId, 'criteria_03_item_004');
+api.stagePortPhotoComponentSelection(deferredSpan, deferredP3.id, '施設全体', breakwaterTargets);
+assert.equal(api.findPortPhoto(deferredSpan, deferredP3.id).photo.component, '上部工', 'changing pending component must still preserve the confirmed photo');
+api.stagePortPhotoComponentSelection(deferredSpan, deferredP3.id, '消波工', breakwaterTargets);
+const deferredCommit = api.commitPendingPortPhotoSelection(deferredSpan, deferredP3.id, 'criteria_03_item_005', breakwaterTargets);
+assert.equal(deferredCommit.status, 'resolved');
+assert.equal(deferredCommit.photo.component, '消波工');
+assert.equal(deferredCommit.photo.inspectionItemId, 'criteria_03_item_005');
+assert.equal(deferredCommit.photo.criteriaSetId, 'criteria_03');
+assert.equal(api.findPortPhoto(deferredSpan, deferredP3.id).record.inspectionItemId, 'criteria_03_item_005');
+assert.deepEqual(Array.from(deferredSpan.inspections.criteria_03_item_004.photos, (photo) => photo.id), ['deferred-P2'], 'P2 must remain in the old inspection');
+assert.deepEqual(Array.from(deferredSpan.inspections.criteria_03_item_005.photos, (photo) => photo.id), ['deferred-P3'], 'only P3 moves to the selected inspection');
+assert.equal(api.findPortPhoto(deferredSpan, deferredP1.id).photo.rating, 'a');
+assert.equal(api.findPortPhoto(deferredSpan, deferredP2.id).photo.rating, 'b');
+Object.assign(deferredCommit.photo, { rating: 'c', ratedAt: '2026-08-23T03:02:00.000Z', conditionComment: 'なし', conditionFreeText: '' });
+api.refreshPortSpanStatuses(deferredSpan, breakwaterTargets);
+deferredUi = api.portDesktopSpanView(deferredSpan, breakwaterTargets);
+for (const pair of [['deferred-P1', 'ケーソン'], ['deferred-P2', '上部工'], ['deferred-P3', '消波工']]) assert.match(deferredUi, new RegExp(`id="port-photo-component-${pair[0]}"[\\s\\S]*?<option selected>${pair[1]}<\\/option>`));
+api.resizePortSpans(deferredState, 2);
+api.setPortNavigation(deferredState, 'span', deferredState.spans[1].id);
+api.setPortNavigation(deferredState, 'span', deferredState.spans[0].id);
+const deferredReload = api.normalizePortState(JSON.parse(JSON.stringify(deferredState))), deferredReloadSpan = deferredReload.spans[0];
+assert.deepEqual(Array.from(['deferred-P1', 'deferred-P2', 'deferred-P3'], (id) => { const photo = api.findPortPhoto(deferredReloadSpan, id).photo; return [photo.component, photo.rating, api.findPortPhoto(deferredReloadSpan, id).record.inspectionItemId]; }), [['ケーソン', 'a', 'criteria_03_item_002'], ['上部工', 'b', 'criteria_03_item_004'], ['消波工', 'c', 'criteria_03_item_005']]);
+const deferredSummary = api.summarizePortFacility(deferredReload);
+assert.equal(deferredSummary.matrix.rows.find((row) => row.component === 'ケーソン').cells[0].counts.a, 1);
+assert.equal(deferredSummary.matrix.rows.find((row) => row.component === '上部工').cells[0].counts.b, 1);
+assert.equal(deferredSummary.matrix.rows.find((row) => row.component === '消波工').cells[0].counts.c, 1);
+const deferredOutput = api.buildPortOutputData(deferredReload);
+assert.ok(api.buildPortExcelBytes(deferredOutput).length > 0);
+const deferredPdf = api.buildPortPdfHtml(deferredOutput);
+for (const value of ['ケーソン', '上部工', '消波工', '評価 a', '評価 b', '評価 c']) assert.match(deferredPdf, new RegExp(value));
+
 assert.deepEqual(Array.from(breakwaterTargets, (target) => ({
   inspectionItemId: target.id,
   component: target.component,
