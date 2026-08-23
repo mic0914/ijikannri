@@ -347,6 +347,7 @@ assert.deepEqual(Array.from(facilityCandidates, (candidate) => candidate.diagnos
 const fixedInitialPhoto = api.createPortPhoto(facilityCandidates[0], { id: 'initial-span' }, { id: 'fixed-initial' });
 assert.equal(api.portPhotoSelectionModel(fixedInitialPhoto, breakwaterTargets).choiceRequired, false, 'a new photo keeps the push target even if its component has multiple items');
 assert.equal(api.portPhotoSelectionModel(fixedInitialPhoto, breakwaterTargets).resolved, true);
+assert.match(api.portPhotoFields(fixedInitialPhoto, breakwaterTargets), /点検項目：移動/, 'a resolved photo in an ambiguous component must identify its inspection item');
 const ambiguousPhoto = api.createPortPhoto(breakwaterTargets.find((candidate) => candidate.component === 'ケーソン'), { id: 'ambiguous-span' }, { id: 'ambiguous-photo' });
 api.setPortPhotoComponent(ambiguousPhoto, '施設全体', breakwaterTargets);
 const ambiguousPhotoUi = api.portPhotoFields(ambiguousPhoto, breakwaterTargets);
@@ -361,6 +362,29 @@ api.setPortPhotoInspectionItem(ambiguousPhoto, facilityCandidates[1].id, breakwa
 assert.equal(ambiguousPhoto.rating, null, 'changing the inspection item must clear its previous rating');
 assert.equal(ambiguousPhoto.conditionFreeText, '');
 assert.equal(api.portPhotoSelectionModel(ambiguousPhoto, breakwaterTargets).item.criteria.a, facilityCandidates[1].criteria.a, 'criteria must follow the selected inspection item');
+
+const ownershipState = api.createPortState(); ownershipState.structureId = caissonBreakwater.id;
+const ownershipSpan = ownershipState.spans[0], ownershipSource = facilityCandidates[1], ownershipDestination = facilityCandidates[0];
+const ownershipRecord = api.ensurePortInspection(ownershipSpan, ownershipSource);
+const ownershipPhoto = api.createPortPhoto(ownershipSource, ownershipSpan, { id: 'ownership-photo', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
+Object.assign(ownershipPhoto, { rating: 'b', ratedAt: '2026-08-23T00:00:00.000Z', conditionComment: 'なし', conditionFreeText: '' });
+ownershipRecord.photos.push(ownershipPhoto);
+api.setPortPhotoInspectionItem(ownershipPhoto, ownershipDestination.id, breakwaterTargets);
+assert.equal(ownershipPhoto.sourceTargetId, ownershipSource.id, 'sourceTargetId remains immutable capture history');
+assert.equal(api.alignPortMobileTargetToPhoto(ownershipSpan, breakwaterTargets, ownershipPhoto), breakwaterTargets.indexOf(ownershipDestination));
+assert.equal(api.portMobilePhotoEntries(ownershipSpan, ownershipSource).length, 0);
+assert.equal(api.portMobilePhotoEntries(ownershipSpan, ownershipDestination)[0].photo.id, ownershipPhoto.id);
+assert.match(api.portMobileSpanView(ownershipSpan, breakwaterTargets), /data-port-photo-component="ownership-photo"/);
+assert.match(api.portMobileSpanView(ownershipSpan, breakwaterTargets), /<option value="criteria_03_item_001" selected>移動<\/option>/);
+assert.equal(api.setPortPhotoComponent(ownershipPhoto, '消波工', breakwaterTargets).status, 'choice-required');
+assert.equal(api.portMobileUnresolvedPhotoEntries(ownershipSpan)[0].photo.id, ownershipPhoto.id);
+assert.match(api.portMobileSpanView(ownershipSpan, breakwaterTargets), /点検項目未選択の写真/);
+const waveDamageTarget = breakwaterTargets.find((target) => target.id === 'criteria_03_item_006');
+api.setPortPhotoInspectionItem(ownershipPhoto, waveDamageTarget.id, breakwaterTargets);
+assert.equal(api.alignPortMobileTargetToPhoto(ownershipSpan, breakwaterTargets, ownershipPhoto), breakwaterTargets.indexOf(waveDamageTarget));
+assert.equal(api.portMobileUnresolvedPhotoEntries(ownershipSpan).length, 0);
+assert.equal(api.portMobilePhotoEntries(ownershipSpan, waveDamageTarget)[0].photo.id, ownershipPhoto.id);
+assert.match(api.portMobileSpanView(ownershipSpan, breakwaterTargets), /<option value="criteria_03_item_006" selected>損傷・欠損<\/option>/);
 
 assert.deepEqual(Array.from(breakwaterTargets, (target) => ({
   inspectionItemId: target.id,
@@ -449,9 +473,14 @@ for (const span of reassignedState.spans) for (const [missingId, replacementId] 
   api.setPortPhotoInspectionItem(photo, replacementId, breakwaterTargets);
   Object.assign(photo, { rating: 'd', ratedAt: '2026-08-23T00:02:00.000Z', conditionComment: 'なし', conditionFreeText: '' });
   const sourceTarget = breakwaterTargets.find((target) => target.id === missingId);
+  const replacementTarget = breakwaterTargets.find((target) => target.id === replacementId);
   assert.equal(api.portTargetStatus(span, sourceTarget, breakwaterTargets), 'pending');
   assert.equal(api.portMobileTargetReady(span, sourceTarget, breakwaterTargets), false, 'sourceTargetId alone must not complete a different inspection item');
-  assert.equal(api.portTargetIncompleteReason(span, sourceTarget, breakwaterTargets), 'この点検対象に紐づく評価済み写真がありません。');
+  assert.equal(api.portTargetIncompleteReason(span, sourceTarget, breakwaterTargets), '写真を撮影するか、スキップしてください。');
+  assert.equal(api.portMobilePhotoEntries(span, sourceTarget).some((entry) => entry.photo.id === photo.id), false, 'a reassigned photo must disappear from its source target display');
+  assert.equal(api.portMobilePhotoEntries(span, replacementTarget).some((entry) => entry.photo.id === photo.id), true, 'a reassigned photo must appear only under its actual inspection item');
+  assert.match(api.portMobileNextActionsView(photo), new RegExp(`data-port-photo-target="${replacementId}"`), 'same-target capture must follow actual inspection-item ownership');
+  assert.doesNotMatch(api.portMobileNextActionsView(photo), new RegExp(`data-port-photo-target="${missingId}"`));
 }
 let reassignedPerformance = api.buildPortPerformanceRatings(reassignedState);
 const pendingDebug = reassignedPerformance.itemRatings.filter((item) => item.status === 'pending').flatMap((item) => item.representatives.filter((row) => row.status === 'pending').map((row) => ({
@@ -479,6 +508,8 @@ reassignedPerformance = api.buildPortPerformanceRatings(reassignedState);
 assert.ok(reassignedPerformance.itemRatings.every((row) => row.status === 'rated' && row.rating === 'D'));
 assert.ok(reassignedPerformance.componentRatings.every((row) => row.status === 'rated' && row.rating === 'D'));
 assert.equal(reassignedPerformance.facilityRating, 'D'); assert.equal(reassignedPerformance.facilityStatus, 'rated');
+assert.equal(reassignedPerformance.spanRepresentatives.length, 30);
+assert.equal(reassignedPerformance.spanRepresentatives.filter((row) => row.status === 'pending').length, 0, 'all six items across five spans must clear every hold');
 
 let multipleComponentCases = 0;
 for (const candidateStructure of structures) {
