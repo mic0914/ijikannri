@@ -404,9 +404,15 @@ assert.match(matrixHtml, /<th>部材<\/th><th>スパン1<\/th><th>スパン2<\/t
 assert.match(matrixHtml, /a×1/);
 assert.match(matrixHtml, /a×1 \/ c×2/);
 assert.match(matrixHtml, />S<\/td>/);
-assert.match(api.portPerformanceView(matrixSummary.performance), /施設全体 性能低下度（一次判定）/);
-assert.match(api.portPerformanceView(matrixSummary.performance), /<strong>判定保留<\/strong>/);
-assert.match(api.portPerformanceView(matrixSummary.performance), /性能低下度は自動一次判定です/);
+const performanceHtml = api.portPerformanceView(matrixSummary.performance);
+assert.match(performanceHtml, /施設全体 性能低下度（一次判定）/);
+assert.match(performanceHtml, /<strong>判定保留<\/strong>/);
+assert.match(performanceHtml, /性能低下度は自動一次判定です/);
+assert.ok(performanceHtml.indexOf('施設全体 性能低下度（一次判定）') < performanceHtml.indexOf('部材別 性能低下度（一次判定）'), 'facility performance must precede component performance');
+const summaryLayoutSource = api.portSummaryView.toString();
+assert.ok(summaryLayoutSource.indexOf('portPerformanceView') < summaryLayoutSource.indexOf('portSummaryMatrixView'), 'performance blocks must precede the span/component matrix');
+assert.ok(summaryLayoutSource.indexOf('portSummaryMatrixView') < summaryLayoutSource.indexOf("detailsTable('スキップ箇所'"), 'matrix must precede skip details');
+assert.ok(summaryLayoutSource.indexOf("detailsTable('スキップ箇所'") < summaryLayoutSource.indexOf('summaryCards'), 'individual metric cards must be the final summary block');
 
 const representativeTarget = { id: 'representative-item' };
 const representativeSpan = { id: 'representative-span', number: 1 };
