@@ -77,11 +77,30 @@ const blankPcUi = api.portPhotoFields(blankPcPhoto, caissonTargets);
 assert.match(blankPcUi, /<option value="" selected>選択してください<\/option>/);
 assert.match(blankPcUi, /data-port-photo-rating="pc-blank"[^>]*disabled/);
 
+const commentPhoto = api.createPortPhoto(caissonTargets[0], workflowSpan, { id: 'comment-photo', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
+commentPhoto.rating = 'b'; commentPhoto.ratedAt = '2026-08-23T00:00:00.000Z';
+let commentUi = api.portPhotoFields(commentPhoto, caissonTargets);
+let commentSelect = commentUi.match(/<select data-port-photo-comment="comment-photo"[\s\S]*?<\/select>/)?.[0] || '';
+assert.doesNotMatch(commentSelect, /選択してください/);
+assert.deepEqual(Array.from(commentSelect.matchAll(/<option value="(あり|なし)"/g), (match) => match[1]), ['あり', 'なし']);
+assert.equal(api.portPhotoCommentComplete(commentPhoto), false);
+api.setPortPhotoComment(commentPhoto, 'あり');
+commentUi = api.portPhotoFields(commentPhoto, caissonTargets);
+assert.doesNotMatch(commentUi.match(/<textarea data-port-photo-free-text="comment-photo"[\s\S]*?<\/textarea>/)?.[0] || '', /disabled/);
+assert.equal(api.portPhotoCommentComplete(commentPhoto), false, 'あり without free text must remain incomplete');
+commentPhoto.conditionFreeText = 'ひび割れあり';
+assert.equal(api.portPhotoCommentComplete(commentPhoto), true, 'あり with free text must complete');
+api.setPortPhotoComment(commentPhoto, 'なし');
+assert.equal(commentPhoto.conditionFreeText, '', 'なし must clear existing free text');
+assert.equal(api.portPhotoCommentComplete(commentPhoto), true, 'なし must not require free text');
+commentUi = api.portPhotoFields(commentPhoto, caissonTargets);
+assert.match(commentUi.match(/<textarea data-port-photo-free-text="comment-photo"[\s\S]*?<\/textarea>/)?.[0] || '', /disabled/);
+
 const pcComponents = ['ケーソン', '上部工（無筋）', 'エプロン'];
 const pcPhotos = pcComponents.map((component, index) => {
   const photo = api.createPortPhoto(null, workflowSpan, { id: `pc-${index + 1}`, data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
   assert.equal(api.setPortPhotoComponent(photo, component, caissonTargets).status, 'resolved');
-  Object.assign(photo, { rating: ['a', 'b', 'c'][index], ratedAt: '2026-08-22T00:00:00.000Z', conditionComment: 'その他', conditionFreeText: `PC写真${index + 1}` });
+  Object.assign(photo, { rating: ['a', 'b', 'c'][index], ratedAt: '2026-08-22T00:00:00.000Z', conditionComment: 'あり', conditionFreeText: `PC写真${index + 1}` });
   return photo;
 });
 pcContainer.photos.push(...pcPhotos);
@@ -109,14 +128,34 @@ sharedRecord.photos.push(mobilePhoto); api.refreshPortSpanStatuses(sharedSpan, c
 const mobileView = api.portMobileSpanView(sharedSpan, caissonTargets);
 assert.match(mobileView, /次の撮影対象：岸壁法線/);
 assert.match(mobileView, />写真を撮影<input[^>]*capture="environment"/);
-assert.match(mobileView, /同じ対象を追加撮影/);
-assert.match(mobileView, />次の対象へ<\/button>/);
+assert.doesNotMatch(mobileView, /同じ対象を追加撮影/, 'same-target capture must not be constantly visible');
+assert.match(mobileView, />次へ<\/button>/);
+assert.doesNotMatch(mobileView, />次の対象へ<\/button>/);
 assert.doesNotMatch(mobileView, /ドラッグ＆ドロップ/);
-Object.assign(mobilePhoto, { rating: 'b', ratedAt: '2026-08-22T01:00:00.000Z', conditionComment: 'その他', conditionFreeText: 'スマホ保存' });
+Object.assign(mobilePhoto, { rating: 'b', ratedAt: '2026-08-22T01:00:00.000Z', conditionComment: 'あり', conditionFreeText: 'スマホ保存' });
 api.refreshPortSpanStatuses(sharedSpan, caissonTargets);
+assert.equal(api.portMobileTargetReady(sharedSpan, sharedTarget, caissonTargets), true);
+assert.equal(api.openPortMobileNextActions(sharedSpan, sharedTarget, caissonTargets), true);
+const mobileNextActionsView = api.portMobileSpanView(sharedSpan, caissonTargets);
+assert.match(mobileNextActionsView, /次の操作を選択/);
+assert.match(mobileNextActionsView, /同じ対象を追加撮影/);
+assert.match(mobileNextActionsView, /新規対象を撮影/);
+api.closePortMobileNextActions();
+const sameTargetPhoto = api.createPortPhotoFromSource(sharedTarget, sharedSpan, mobilePhoto, { id: 'same-target-photo', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
+assert.equal(sameTargetPhoto.spanId, mobilePhoto.spanId);
+assert.equal(sameTargetPhoto.component, mobilePhoto.component);
+assert.equal(sameTargetPhoto.inspectionItemId, mobilePhoto.inspectionItemId);
+assert.equal(sameTargetPhoto.criteriaSetId, mobilePhoto.criteriaSetId);
+assert.equal(sameTargetPhoto.rating, null);
+assert.equal(sameTargetPhoto.conditionComment, '');
+assert.equal(sameTargetPhoto.conditionFreeText, '');
+assert.equal(mobilePhoto.rating, 'b', 'same-target photo creation must not change the existing photo rating');
+assert.equal(mobilePhoto.conditionComment, 'あり', 'same-target photo creation must not change the existing photo comment');
+assert.notEqual(api.nextIncompletePortTargetIndex(sharedSpan, caissonTargets, 0), 0, 'new-target flow must select a different incomplete inspection item');
 const incompleteSameTargetPhoto = api.createPortPhoto(sharedTarget, sharedSpan, { id: 'shared-incomplete', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
 sharedRecord.photos.push(incompleteSameTargetPhoto); api.reindexPortSpanPhotos(sharedSpan); api.refreshPortSpanStatuses(sharedSpan, caissonTargets);
 assert.equal(api.portTargetStatus(sharedSpan, sharedTarget, caissonTargets), 'completed', 'one completed photo is enough to complete its inspection item');
+assert.equal(api.portMobileTargetReady(sharedSpan, sharedTarget, caissonTargets), false, 'mobile next must wait until every newly added photo is entered');
 let sharedReload = api.normalizePortState(JSON.parse(JSON.stringify(sharedState)));
 let sharedReloadPhoto = api.findPortPhoto(sharedReload.spans[0], 'shared-photo').photo;
 assert.equal(sharedReloadPhoto.component, sharedTarget.component);
@@ -124,7 +163,7 @@ assert.equal(sharedReloadPhoto.rating, 'b');
 assert.equal(sharedReloadPhoto.conditionFreeText, 'スマホ保存');
 assert.match(api.portDesktopSpanView(sharedReload.spans[0], caissonTargets), /data-port-photo-component="shared-photo"/);
 assert.equal(api.setPortPhotoComponent(sharedReloadPhoto, 'エプロン', caissonTargets).status, 'resolved');
-Object.assign(sharedReloadPhoto, { rating: 'c', ratedAt: '2026-08-22T02:00:00.000Z', conditionComment: 'その他', conditionFreeText: 'PC修正' });
+Object.assign(sharedReloadPhoto, { rating: 'c', ratedAt: '2026-08-22T02:00:00.000Z', conditionComment: 'あり', conditionFreeText: 'PC修正' });
 sharedReload = api.normalizePortState(JSON.parse(JSON.stringify(sharedReload)));
 sharedReloadPhoto = api.findPortPhoto(sharedReload.spans[0], 'shared-photo').photo;
 assert.equal(sharedReloadPhoto.component, 'エプロン');
@@ -156,7 +195,7 @@ for (const [structureName, component] of ambiguousSpecifications) {
   const ambiguousTargets = api.portTargetsForStructure(ambiguousStructure.id);
   const sourceTarget = ambiguousTargets.find((candidate) => candidate.component !== component);
   const photo = api.createPortPhoto(sourceTarget, { id: 'ambiguity-span' }, { id: `${ambiguousStructure.id}-${component}` });
-  photo.rating = 'a'; photo.ratedAt = '2026-08-21T00:00:00.000Z'; photo.conditionComment = 'その他'; photo.conditionFreeText = '旧評価';
+  photo.rating = 'a'; photo.ratedAt = '2026-08-21T00:00:00.000Z'; photo.conditionComment = 'あり'; photo.conditionFreeText = '旧評価';
   const result = api.setPortPhotoComponent(photo, component, ambiguousTargets);
   assert.equal(result.status, 'choice-required', `${structureName} / ${component} must require user selection`);
   assert.ok(result.candidates.length >= 2);
@@ -187,7 +226,7 @@ assert.match(ambiguousPhotoUi, /data-port-photo-inspection-item="ambiguous-photo
 assert.match(ambiguousPhotoUi, /data-port-photo-rating="ambiguous-photo"[^>]*disabled/);
 assert.equal(api.refreshPortInspectionStatus({ photos: [ambiguousPhoto], skipped: false }), 'photos', 'an unresolved inspection item must keep the target incomplete');
 api.setPortPhotoInspectionItem(ambiguousPhoto, facilityCandidates[0].id, breakwaterTargets);
-Object.assign(ambiguousPhoto, { rating: 'a', ratedAt: '2026-08-21T00:00:00.000Z', conditionComment: 'その他', conditionFreeText: '移動評価' });
+Object.assign(ambiguousPhoto, { rating: 'a', ratedAt: '2026-08-21T00:00:00.000Z', conditionComment: 'あり', conditionFreeText: '移動評価' });
 assert.equal(api.portPhotoSelectionModel(ambiguousPhoto, breakwaterTargets).item.criteria.a, facilityCandidates[0].criteria.a);
 api.setPortPhotoInspectionItem(ambiguousPhoto, facilityCandidates[1].id, breakwaterTargets);
 assert.equal(ambiguousPhoto.rating, null, 'changing the inspection item must clear its previous rating');
@@ -218,7 +257,7 @@ const directSpan = directState.spans[0];
 const wallIndex = api.selectPortComponent(directSpan, caissonTargets, '岸壁法線');
 const wallTarget = caissonTargets[wallIndex];
 const wallRecord = api.ensurePortInspection(directSpan, wallTarget);
-wallRecord.photos.push({ id: 'wall-photo', inspectionItemId: wallTarget.id, criteriaSetId: wallTarget.criteriaSetId, component: wallTarget.component, order: 1, rating: 'a', ratedAt: '2026-08-21T01:00:00.000Z', conditionComment: 'その他', conditionFreeText: '岸壁法線写真', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
+wallRecord.photos.push({ id: 'wall-photo', inspectionItemId: wallTarget.id, criteriaSetId: wallTarget.criteriaSetId, component: wallTarget.component, order: 1, rating: 'a', ratedAt: '2026-08-21T01:00:00.000Z', conditionComment: 'あり', conditionFreeText: '岸壁法線写真', data: 'data:image/jpeg;base64,/9j/2Q==', mimeType: 'image/jpeg' });
 api.refreshPortInspectionStatus(wallRecord);
 const upperIndex = api.selectPortComponent(directSpan, caissonTargets, '上部工（RC）');
 assert.equal(caissonTargets[upperIndex].component, '上部工（RC）', 'users must be able to navigate away from 岸壁法線');
@@ -283,10 +322,10 @@ assert.equal(restored.spans[0].id, state.spans[0].id, 'span ids must survive rel
 const first = api.ensurePortInspection(state.spans[0], targets[0]);
 const jpeg = 'data:image/jpeg;base64,/9j/2Q==';
 const photo1 = api.createPortPhoto(targets[0], state.spans[0], { id: 'p1', data: jpeg, order: 9, mimeType: 'image/jpeg' });
-Object.assign(photo1, { rating: 'a', ratedAt: '2026-08-21T00:00:00.000Z', conditionComment: 'その他', conditionFreeText: 'コメントA' });
+Object.assign(photo1, { rating: 'a', ratedAt: '2026-08-21T00:00:00.000Z', conditionComment: 'あり', conditionFreeText: 'コメントA' });
 const photo2 = api.createPortPhoto(targets[0], state.spans[0], { id: 'p2', data: jpeg, order: 9, mimeType: 'image/jpeg' });
 assert.equal(api.setPortPhotoComponent(photo2, 'エプロン', targets).status, 'resolved', 'a single-candidate component must resolve automatically');
-Object.assign(photo2, { rating: 'c', ratedAt: '2026-08-21T00:01:00.000Z', conditionComment: 'その他', conditionFreeText: '' });
+Object.assign(photo2, { rating: 'c', ratedAt: '2026-08-21T00:01:00.000Z', conditionComment: 'あり', conditionFreeText: '' });
 first.photos.push(photo1, photo2);
 api.reindexPortPhotos(first);
 assert.deepEqual(Array.from(first.photos, (photo) => photo.order), [1, 2]);
@@ -303,7 +342,7 @@ assert.equal(api.setPortPhotoComponent(first.photos[1], 'ケーソン', targets)
 assert.equal(first.photos[1].rating, null, 'changing photo 2 criteria must clear only photo 2 assessment');
 assert.equal(JSON.stringify(first.photos[0]), photo1Snapshot, 'changing photo 2 must not affect photo 1');
 assert.equal(api.setPortPhotoComponent(first.photos[1], 'エプロン', targets).status, 'resolved');
-Object.assign(first.photos[1], { rating: 'c', ratedAt: '2026-08-21T00:01:00.000Z', conditionComment: 'その他', conditionFreeText: 'コメントC' });
+Object.assign(first.photos[1], { rating: 'c', ratedAt: '2026-08-21T00:01:00.000Z', conditionComment: 'あり', conditionFreeText: 'コメントC' });
 assert.equal(api.refreshPortInspectionStatus(first), 'completed');
 
 const reload = api.normalizePortState(JSON.parse(JSON.stringify(state)));
@@ -328,7 +367,7 @@ assert.equal(first.photos[1].rating, 'c', 'adding a photo must preserve photo 2'
 assert.equal(api.refreshPortInspectionStatus(first), 'completed');
 first.photos[2].rating = 'd';
 first.photos[2].ratedAt = '2026-08-21T00:02:00.000Z';
-first.photos[2].conditionComment = 'その他';
+first.photos[2].conditionComment = 'あり';
 first.photos[2].conditionFreeText = 'コメントD';
 assert.equal(api.refreshPortInspectionStatus(first), 'completed');
 const photoCardUis = first.photos.map((photo) => api.portPhotoFields(photo, targets));
@@ -373,7 +412,7 @@ const matrixCaissonTarget = matrixTargets.find((target) => target.component === 
 const addMatrixPhoto = (span, ownerTarget, actualTarget, id, rating) => {
   const record = api.ensurePortInspection(span, ownerTarget);
   const photo = api.createPortPhoto(actualTarget, span, { id, data: jpeg, mimeType: 'image/jpeg' });
-  Object.assign(photo, { rating, ratedAt: '2026-08-22T03:00:00.000Z', conditionComment: 'その他', conditionFreeText: `${id}コメント` });
+  Object.assign(photo, { rating, ratedAt: '2026-08-22T03:00:00.000Z', conditionComment: 'あり', conditionFreeText: `${id}コメント` });
   record.photos.push(photo);
   return photo;
 };
@@ -480,7 +519,7 @@ assert.equal(performance.facilityRating, null);
 performanceTargetResults.find((row) => row.target.id === 'performance-ii').photos.pop();
 
 assert.equal(api.setPortPhotoComponent(matrixApronPhoto2, '上部工（RC）', matrixTargets).status, 'resolved');
-Object.assign(matrixApronPhoto2, { rating: 'd', ratedAt: '2026-08-22T04:00:00.000Z', conditionComment: 'その他', conditionFreeText: '部材変更後' });
+Object.assign(matrixApronPhoto2, { rating: 'd', ratedAt: '2026-08-22T04:00:00.000Z', conditionComment: 'あり', conditionFreeText: '部材変更後' });
 matrixSummary = api.summarizePortFacility(matrixState);
 assert.deepEqual({ ...matrixSummary.matrix.rows.find((row) => row.component === 'エプロン').cells[0].counts }, { a: 1, b: 0, c: 1, d: 0 }, 'component change must recalculate the matrix');
 assert.equal(matrixSummary.matrix.rows.find((row) => row.component === '上部工（RC）').cells[0].counts.d, 1);
@@ -507,6 +546,7 @@ assert.deepEqual(Array.from(migrated.photos, (photo) => photo.rating), ['b', 'b'
 assert.deepEqual(Array.from(migrated.photos, (photo) => photo.component), [targets[0].component, targets[0].component], 'missing components are filled from inspectionItemId and existing components are preserved');
 assert.ok(migrated.photos.every((photo) => photo.criteriaSetId === targets[0].criteriaSetId));
 assert.ok(migrated.photos.every((photo) => photo.conditionFreeText === '旧コメント'));
+assert.ok(migrated.photos.every((photo) => photo.conditionComment === 'あり'), 'legacy その他 comments must migrate safely to あり');
 assert.ok(!Object.hasOwn(migrated, 'rating') && !Object.hasOwn(migrated, 'conditionComment'), 'legacy target fields must not remain in new saves');
 assert.equal(migrated.status, 'completed');
 
@@ -557,7 +597,7 @@ for (const span of completedState.spans) for (const [targetIndex, target] of com
   const record = api.ensurePortInspection(span, target);
   const rating = span.number === 1 && targetIndex === 0 ? 'a' : 'd';
   const photo = api.createPortPhoto(target, span, { id: `completed-${span.number}-${targetIndex}`, data: jpeg, mimeType: 'image/jpeg' });
-  Object.assign(photo, { rating, ratedAt: '2026-08-23T00:00:00.000Z', conditionComment: 'その他', conditionFreeText: '完了確認' });
+  Object.assign(photo, { rating, ratedAt: '2026-08-23T00:00:00.000Z', conditionComment: 'あり', conditionFreeText: '完了確認' });
   record.photos.push(photo); api.refreshPortInspectionStatus(record, completedTargets);
 }
 const completedOutput = api.buildPortOutputData(completedState);
@@ -571,6 +611,8 @@ assert.match(completedSummaryXml, /施設全体 性能低下度（一次判定�
 assert.match(completedSummaryXml, /<t xml:space="preserve">A<\/t>/, 'Excel must contain the common facility A rating');
 const completedPdfHtml = api.buildPortPdfHtml(completedOutput);
 assert.match(completedPdfHtml, /施設全体 性能低下度（一次判定） <strong>A<\/strong>/, 'PDF must contain the common facility A rating');
+api.closePortMobileNextActions();
+assert.match(api.portMobileSpanView(completedState.spans[0], completedTargets), /このスパンの点検対象はすべて完了しました/);
 
 const keptPhoto = first.photos[1];
 first.photos.splice(0, 1);
@@ -606,6 +648,11 @@ assert.match(source, /次の撮影対象：\$\{esc\(target\.component/);
 assert.match(source, /未完了項目を確認/);
 assert.match(source, /portUiMode==='mobile'\?portMobileSpanView/);
 assert.match(source, /capture="environment"/);
+assert.match(source, /PORT_COMMENT_VALUES=\['あり','なし'\]/);
+assert.match(source, /data-port-photo-source/);
+assert.match(source, /data-port-action="new-target"/);
+assert.match(source, />次へ<\/button>/);
+assert.doesNotMatch(source, />次の対象へ<\/button>/);
 assert.match(index, /\.port-ui-mobile \.port-photos\{grid-template-columns:1fr\}/);
 assert.match(source, /function buildPortSummaryMatrix/);
 assert.match(source, /sourceSheets:\['00_使用方法','13_評価基準'\]/);
