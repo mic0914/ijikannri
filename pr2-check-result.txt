@@ -1,0 +1,26 @@
+]633;E;printf 'PR_JSON\\n';bc66d6f6-7d0d-4b97-951f-e798a1ec30d8]633;CPR_JSON
+{"baseRefName":"main","headRefName":"work/ver-16.8","headRefOid":"de4f9c27c0bcafee8aa3e6d6a78ef486da6b6dec","mergeStateStatus":"CLEAN","mergeable":"MERGEABLE","number":2,"state":"OPEN","statusCheckRollup":[{"__typename":"CheckRun","completedAt":"2026-08-27T07:53:27Z","conclusion":"SUCCESS","detailsUrl":"https://dash.cloudflare.com/d5e0a12ed0d297b130b0f599562c33e2/workers/services/view/ijikannri-access/production/builds/38a40cb3-4f79-4098-bf4b-dfc833c25e90","name":"Workers Builds: ijikannri-access","startedAt":"2026-08-27T07:53:27Z","status":"COMPLETED","workflowName":""}],"url":"https://github.com/mic0914/ijikannri/pull/2"}
+FILES
+cloudflare-worker/public/index.html
+index.html
+HTML_CMP
+cmp_rc=0
+JS_SYNTAX
+OK scripts=2
+DIFF_CHECK
+diff_rc=0
+SECURITY
+security smoke tests: passed
+security_rc=0
+NUMSTAT
+95	7	cloudflare-worker/public/index.html
+95	7	index.html
+HUNKS
+@@ -301,0 +302,11 @@ body:not(.port-mode) .fishery-progress-item{
+@@ -740,0 +752,4 @@ const PORT_KEY='quay-normal-displacement-port-v1';
+@@ -1057,3 +1072,3 @@ function markPortMobileCompletion(span,targets,photo){const target=targets[span.
+@@ -1065,0 +1081,70 @@ function setupPort(){hideModeChooser();const forced=new URL(location.href).searc
+@@ -1292,2 +1377,5 @@ if(typeof document==='undefined')return;
+@@ -1302 +1390 @@ if(event.target.matches('[data-port-photo-comment]')){const span=currentPortSpan
+@@ -1313 +1401 @@ global.addEventListener?.('beforeunload',revokeAllPortPhotoObjectUrls);
+STATUS

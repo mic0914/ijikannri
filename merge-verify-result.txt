@@ -1,0 +1,5 @@
+]633;E;printf 'PR=';c69a541c-3caa-4b89-9b04-7150abe26c97]633;CPR={"mergeCommit":{"oid":"9443387f3505902efe815f9b4cee3f147f677a9c"},"mergedAt":"2026-08-27T12:25:49Z","state":"MERGED","url":"https://github.com/mic0914/ijikannri/pull/2"}
+MAIN_HEAD=9443387f3505902efe815f9b4cee3f147f677a9c
+HTML_CMP_RC=0
+eaaeb6e5ee0fe15a04167e485437e94db658c09996364eaf261dc7354543410e  /tmp/ver168-main-index.html
+eaaeb6e5ee0fe15a04167e485437e94db658c09996364eaf261dc7354543410e  /tmp/ver168-main-mirror.html
